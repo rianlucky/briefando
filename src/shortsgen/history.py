@@ -27,10 +27,19 @@ def _now() -> str:
     return datetime.now().isoformat(timespec="seconds")
 
 
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, coltype: str) -> None:
+    """Migracao minima: adiciona a coluna se o banco foi criado antes dela existir."""
+    existing = {row[1] for row in conn.execute(f"PRAGMA table_info({table})")}
+    if column not in existing:
+        conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {coltype}")
+        conn.commit()
+
+
 def connect(db_path: Path) -> sqlite3.Connection:
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path)
     conn.executescript(_SCHEMA)
+    _ensure_column(conn, "runs", "source_duration_seconds", "REAL")
     return conn
 
 
@@ -78,6 +87,21 @@ class RunRecorder:
         self._conn.commit()
         self._conn.close()
 
+    def mark_cancelled(self) -> None:
+        self._conn.execute(
+            "UPDATE runs SET status = 'cancelled', finished_at = ? WHERE run_id = ?",
+            (_now(), self._run_id),
+        )
+        self._conn.commit()
+        self._conn.close()
+
+    def set_source_duration(self, seconds: float) -> None:
+        self._conn.execute(
+            "UPDATE runs SET source_duration_seconds = ? WHERE run_id = ?",
+            (seconds, self._run_id),
+        )
+        self._conn.commit()
+
 
 def get_daily_stats(db_path: Path) -> dict:
     """Shorts gerados hoje, execucoes com erro hoje e tempo medio por etapa.
@@ -108,3 +132,37 @@ def get_daily_stats(db_path: Path) -> dict:
         "errors_today": errors_today,
         "stage_avgs": {row["stage"]: row["avg_seconds"] for row in stage_rows},
     }
+
+
+DEFAULT_TRANSCRIPTION_FACTOR = 1.5
+
+
+def get_transcription_factor(db_path: Path) -> float:
+    """Media (tempo de transcricao / duracao do video) das execucoes passadas.
+
+    Usado pra estimar o progresso de uma transcricao em andamento (o
+    faster-whisper nao reporta progresso incremental). Sem historico
+    suficiente, cai no `DEFAULT_TRANSCRIPTION_FACTOR`.
+    """
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT
+            (julianday(s.finished_at) - julianday(s.started_at)) * 86400.0 AS transcricao_seconds,
+            r.source_duration_seconds AS video_seconds
+        FROM run_stages s
+        JOIN runs r ON r.run_id = s.run_id
+        WHERE s.stage = 'transcricao'
+          AND s.finished_at IS NOT NULL
+          AND r.source_duration_seconds IS NOT NULL
+          AND r.source_duration_seconds > 0
+        """
+    ).fetchall()
+    conn.close()
+
+    if not rows:
+        return DEFAULT_TRANSCRIPTION_FACTOR
+
+    ratios = [row["transcricao_seconds"] / row["video_seconds"] for row in rows]
+    return sum(ratios) / len(ratios)

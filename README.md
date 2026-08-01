@@ -38,11 +38,13 @@ Todo run fica registrado em `data/shortsgen.db` (SQLite): estado (rodando/sucess
 uv run python -m shortsgen.cli stats
 ```
 
-Ou abra o painel interativo (Textual) — mostra status dos serviços e estatisticas do dia ao vivo, e deixa colar uma URL/arquivo e acompanhar o progresso da execucao (etapa atual, barra de progresso por clipe, log em tempo real) sem sair do painel:
+Ou abra o painel interativo (Textual) — mostra status dos serviços e estatisticas do dia ao vivo, e deixa colar uma URL/arquivo e acompanhar o progresso da execucao (etapa atual, progresso real de download, estimativa de progresso da transcricao, barra por clipe no render, log com timestamp) sem sair do painel:
 
 ```sh
 uv run python -m shortsgen.cli tui
 ```
+
+O painel tem um botao **Cancelar**: interrompe download/highlights/render na hora. A transcricao (Whisper) nao tem ponto de interrupcao no meio, entao o cancelamento so e aplicado assim que a transcricao atual terminar (nao economiza o tempo ja gasto, so evita highlights/render desnecessarios depois).
 
 > Nesta maquina, o antivirus bloqueia o executavel `shortsgen.exe` que o uv gera
 > (launcher generico nao assinado). Por isso rodamos via `python -m shortsgen.cli`

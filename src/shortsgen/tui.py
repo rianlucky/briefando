@@ -1,4 +1,6 @@
 import logging
+import threading
+from datetime import datetime
 from pathlib import Path
 
 from textual import work
@@ -28,7 +30,7 @@ CSS = """
     width: 1fr;
 }
 
-#run-button {
+#run-button, #cancel-button {
     width: auto;
     margin-left: 1;
 }
@@ -88,6 +90,12 @@ class TuiReporter(ProgressReporter):
     def stage_started(self, stage: str) -> None:
         self._safe_call(self._app.set_stage, stage)
 
+    def download_progress(self, percent: float) -> None:
+        self._safe_call(self._app.set_percent_progress, percent)
+
+    def transcription_progress(self, percent: float) -> None:
+        self._safe_call(self._app.set_percent_progress, percent)
+
     def clip_progress(self, done: int, total: int) -> None:
         self._safe_call(self._app.set_clip_progress, done, total)
 
@@ -96,6 +104,9 @@ class TuiReporter(ProgressReporter):
 
     def run_failed(self, error: str, run_dir: Path) -> None:
         self._safe_call(self._app.handle_run_failed, error, run_dir)
+
+    def run_cancelled(self, run_dir: Path) -> None:
+        self._safe_call(self._app.handle_run_cancelled, run_dir)
 
 
 class BriefandoApp(App):
@@ -108,12 +119,14 @@ class BriefandoApp(App):
     def __init__(self) -> None:
         super().__init__()
         self._job_running = False
+        self._cancel_event: threading.Event | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
         with Horizontal(id="input-row"):
             yield Input(placeholder="URL do YouTube ou caminho de video local...", id="source-input")
             yield Button("Gerar", id="run-button", variant="primary")
+            yield Button("Cancelar", id="cancel-button", variant="error", disabled=True)
         yield Static("Nenhuma execucao em andamento", id="stage-label")
         yield ProgressBar(id="clip-progress", show_eta=False)
         with Horizontal(id="panels-row"):
@@ -156,6 +169,8 @@ class BriefandoApp(App):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "run-button":
             self._start_job()
+        elif event.button.id == "cancel-button":
+            self._cancel_job()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
         if event.input.id == "source-input":
@@ -175,36 +190,63 @@ class BriefandoApp(App):
             return
 
         self._job_running = True
+        self._cancel_event = threading.Event()
+        self.query_one("#run-button", Button).disabled = True
+        self.query_one("#cancel-button", Button).disabled = False
         self.query_one("#clip-progress", ProgressBar).update(total=100, progress=0)
         self.append_log(f"[bold]Iniciando:[/bold] {source}")
-        self._run_job(source)
+        self._run_job(source, self._cancel_event)
+
+    def _cancel_job(self) -> None:
+        if not self._job_running or self._cancel_event is None:
+            return
+        self._cancel_event.set()
+        self.query_one("#cancel-button", Button).disabled = True
+        self.append_log(
+            "[yellow]Cancelamento solicitado - para no proximo ponto seguro "
+            "(se estiver transcrevendo, so para quando a transcricao atual terminar).[/yellow]"
+        )
 
     @work(thread=True)
-    def _run_job(self, source: str) -> None:
+    def _run_job(self, source: str, cancel_event: threading.Event) -> None:
         try:
-            run_pipeline(source, reporter=TuiReporter(self))
+            run_pipeline(source, reporter=TuiReporter(self), cancel_event=cancel_event)
         except Exception:
             logger.exception("Run disparado pelo TUI falhou")
 
     def append_log(self, text: str) -> None:
-        self.query_one("#run-log", RichLog).write(text)
+        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
+        self.query_one("#run-log", RichLog).write(f"[dim]{timestamp}[/dim] {text}")
 
     def set_stage(self, stage: str) -> None:
         self.query_one("#stage-label", Static).update(f"Etapa atual: {STAGE_LABELS.get(stage, stage)}")
 
+    def set_percent_progress(self, percent: float) -> None:
+        self.query_one("#clip-progress", ProgressBar).update(total=100, progress=percent)
+
     def set_clip_progress(self, done: int, total: int) -> None:
         self.query_one("#clip-progress", ProgressBar).update(total=max(total, 1), progress=done)
 
+    def _reset_job_state(self) -> None:
+        self._job_running = False
+        self._cancel_event = None
+        self.query_one("#run-button", Button).disabled = False
+        self.query_one("#cancel-button", Button).disabled = True
+        self.query_one("#stage-label", Static).update("Nenhuma execucao em andamento")
+
     def handle_run_finished(self, clips: int, output_dir: Path) -> None:
         self.append_log(f"[bold green]Pronto! {clips} clipe(s) em {output_dir}[/bold green]")
-        self.query_one("#stage-label", Static).update("Nenhuma execucao em andamento")
-        self._job_running = False
+        self._reset_job_state()
         self.refresh_stats()
 
     def handle_run_failed(self, error: str, run_dir: Path) -> None:
         self.append_log(f"[red]Erro: {error}[/red] (arquivos preservados em {run_dir})")
-        self.query_one("#stage-label", Static).update("Nenhuma execucao em andamento")
-        self._job_running = False
+        self._reset_job_state()
+        self.refresh_stats()
+
+    def handle_run_cancelled(self, run_dir: Path) -> None:
+        self.append_log(f"[yellow]Execucao cancelada.[/yellow] Arquivos parciais em {run_dir}")
+        self._reset_job_state()
         self.refresh_stats()
 
 

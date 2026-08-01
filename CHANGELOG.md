@@ -13,6 +13,10 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 - Comando `shortsgen tui`: painel interativo em Textual — status dos serviços e estatísticas do dia atualizando sozinhos a cada 5s, com um campo para colar uma URL/arquivo e rodar o pipeline dali mesmo, acompanhando o progresso ao vivo (etapa atual, barra de progresso por clipe e log da execução).
 - `pipeline_runner.py`: orquestração do pipeline extraída do `cli.py` para um `ProgressReporter` reutilizável — CLI (`rich`) e TUI (`textual`) compartilham a mesma lógica, cada um só troca como o progresso é exibido.
 - `health.py` e `get_daily_stats` (em `history.py`): checks do `doctor` e cálculo de estatísticas viraram funções compartilhadas, reaproveitadas tanto pela CLI quanto pelo TUI.
+- Progresso real de download no painel: hooks nativos do yt-dlp (bytes baixados/total) refletidos na barra de progresso.
+- Estimativa de progresso da transcrição: como o faster-whisper não reporta progresso incremental, a barra estima o percentual a partir do tempo decorrido e de um fator (`tempo de transcrição / duração do vídeo`) calculado com a média do próprio histórico (`get_transcription_factor`) — melhora sozinho conforme mais vídeos rodam. Nova coluna `runs.source_duration_seconds` (com migração automática pra bancos já existentes) guarda a duração de cada vídeo processado.
+- Timestamp (`dd/mm/aaaa hh:mm:ss`) em cada linha do log de atividades do painel.
+- Botão **Cancelar** no painel: interrompe download, highlights e render (ffmpeg/reframe mortos na hora via `cancel_event`) de forma limpa. A transcrição (Whisper) não tem ponto de interrupção no meio — o cancelamento nesse caso só é aplicado assim que a transcrição atual terminar. Novo estado `cancelled` no histórico (distinto de `error`).
 
 ### Corrigido
 - Reporter do TUI agora falha de forma silenciosa (só loga) se o painel já tiver sido fechado enquanto uma execução ainda rodava em background — antes, essa falha de UI podia sobrescrever o resultado real da execução no histórico.

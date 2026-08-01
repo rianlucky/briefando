@@ -7,6 +7,7 @@ from mediapipe.tasks.python import vision
 from mediapipe.tasks.python.core.base_options import BaseOptions
 
 from shortsgen.config import settings
+from shortsgen.exceptions import PipelineCancelled
 
 TARGET_ASPECT = 9 / 16
 
@@ -34,7 +35,7 @@ def _ensure_model() -> Path:
 
 
 def _detect_face_samples(
-    video_path: Path, sample_every_s: float = 0.2
+    video_path: Path, sample_every_s: float = 0.2, cancel_event=None
 ) -> tuple[list[tuple[float, list[tuple[float, float]]]], int, int]:
     """Amostra o video e retorna, por instante, os ate 2 maiores rostos detectados
     como (centro_x, proporcao_da_area_do_frame), ordenados do maior pro menor."""
@@ -54,29 +55,33 @@ def _detect_face_samples(
     samples: list[tuple[float, list[tuple[float, float]]]] = []
     frame_idx = 0
 
-    with vision.FaceDetector.create_from_options(options) as detector:
-        while True:
-            ok, frame = cap.read()
-            if not ok:
-                break
-            if frame_idx % step == 0:
-                t = frame_idx / fps
-                rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-                result = detector.detect_for_video(mp_image, int(t * 1000))
-                faces = []
-                for det in result.detections:
-                    box = det.bounding_box
-                    area_ratio = (box.width * box.height) / frame_area
-                    if area_ratio < _MIN_FACE_AREA_RATIO:
-                        continue
-                    center_x = box.origin_x + box.width / 2
-                    faces.append((center_x, area_ratio))
-                faces.sort(key=lambda f: f[1], reverse=True)
-                samples.append((t, faces[:2]))
-            frame_idx += 1
+    try:
+        with vision.FaceDetector.create_from_options(options) as detector:
+            while True:
+                if frame_idx % step == 0 and cancel_event is not None and cancel_event.is_set():
+                    raise PipelineCancelled("Cancelado durante a deteccao de rosto")
+                ok, frame = cap.read()
+                if not ok:
+                    break
+                if frame_idx % step == 0:
+                    t = frame_idx / fps
+                    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+                    mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
+                    result = detector.detect_for_video(mp_image, int(t * 1000))
+                    faces = []
+                    for det in result.detections:
+                        box = det.bounding_box
+                        area_ratio = (box.width * box.height) / frame_area
+                        if area_ratio < _MIN_FACE_AREA_RATIO:
+                            continue
+                        center_x = box.origin_x + box.width / 2
+                        faces.append((center_x, area_ratio))
+                    faces.sort(key=lambda f: f[1], reverse=True)
+                    samples.append((t, faces[:2]))
+                frame_idx += 1
+    finally:
+        cap.release()
 
-    cap.release()
     return samples, src_w, src_h
 
 
@@ -185,11 +190,12 @@ def reframe_to_vertical(
     dst_path: Path,
     target_w: int = 1080,
     target_h: int = 1920,
+    cancel_event=None,
 ) -> None:
     """Recorta o video horizontal em 9:16. Segue o rosto de quem fala quando ha
     1 pessoa em cena; quando ha 2 pessoas estaveis, alterna pra split-screen
     (uma em cima, outra embaixo). Saida sem audio."""
-    samples, src_w, src_h = _detect_face_samples(src_path)
+    samples, src_w, src_h = _detect_face_samples(src_path, cancel_event=cancel_event)
     single_track, left_track, right_track, raw_mode = _build_tracks(samples, src_w)
     mode_track = _debounce_mode(raw_mode)
 
@@ -212,28 +218,31 @@ def reframe_to_vertical(
     fourcc = cv2.VideoWriter_fourcc(*"mp4v")
     writer = cv2.VideoWriter(str(dst_path), fourcc, fps, (target_w, target_h))
 
-    frame_idx = 0
-    while True:
-        ok, frame = cap.read()
-        if not ok:
-            break
-        t = frame_idx / fps
+    try:
+        frame_idx = 0
+        while True:
+            if cancel_event is not None and cancel_event.is_set():
+                raise PipelineCancelled("Cancelado durante o reenquadramento")
+            ok, frame = cap.read()
+            if not ok:
+                break
+            t = frame_idx / fps
 
-        if mode_at(t) == 2:
-            top = _crop_and_resize(
-                frame, left_at(t), crop_w_half, crop_h_half, target_w, half_h, src_w
-            )
-            bottom = _crop_and_resize(
-                frame, right_at(t), crop_w_half, crop_h_half, target_w, other_half_h, src_w
-            )
-            combined = cv2.vconcat([top, bottom])
-        else:
-            combined = _crop_and_resize(
-                frame, single_at(t), crop_w_single, crop_h_single, target_w, target_h, src_w
-            )
+            if mode_at(t) == 2:
+                top = _crop_and_resize(
+                    frame, left_at(t), crop_w_half, crop_h_half, target_w, half_h, src_w
+                )
+                bottom = _crop_and_resize(
+                    frame, right_at(t), crop_w_half, crop_h_half, target_w, other_half_h, src_w
+                )
+                combined = cv2.vconcat([top, bottom])
+            else:
+                combined = _crop_and_resize(
+                    frame, single_at(t), crop_w_single, crop_h_single, target_w, target_h, src_w
+                )
 
-        writer.write(combined)
-        frame_idx += 1
-
-    writer.release()
-    cap.release()
+            writer.write(combined)
+            frame_idx += 1
+    finally:
+        writer.release()
+        cap.release()
