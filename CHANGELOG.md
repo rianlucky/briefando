@@ -2,7 +2,14 @@
 
 Todas as mudanças notáveis deste projeto serão documentadas neste arquivo.
 
+Cada versão leva o nome de uma pedra/rocha/cristal, começando das mais comuns e
+subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
+
 ## [Não lançado]
+
+## [0.1.0] - Quartzo - 2026-08-01
+
+Primeira versão versionada do projeto — MVP funcional + Fase 1 (Fundação) do roadmap.
 
 ### Adicionado
 - Skill `briefando-workflow` para padronizar o fluxo de desenvolvimento (leitura de VISION/ROADMAP no início da sessão, checklist de encerramento).
