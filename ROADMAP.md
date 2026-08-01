@@ -1,6 +1,6 @@
 # 🚀 Briefando Roadmap
 
->Status: MVP Funcional ✅
+>Status: Fase 2 concluída ✅ — Fase 3 (Automação) em andamento
 
 ---
 
@@ -36,7 +36,7 @@
 
 ---
 
-# 🛠️ FASE 2 — Operação
+# 🛠️ FASE 2 — Operação ✅ (concluída 2026-08-01)
 
 ## Interface
 
@@ -62,7 +62,7 @@
 
 ---
 
-# ⚙️ FASE 3 — Automação
+# ⚙️ FASE 3 — Automação 🚧 (em andamento)
 
 ## Fila
 

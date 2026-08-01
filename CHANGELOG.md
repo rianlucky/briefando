@@ -7,6 +7,10 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.2.0] - Ágata - 2026-08-01
+
+Fase 2 (Operação) do roadmap concluída.
+
 ### Corrigido
 - Split-screen do reenquadramento (`reframe.py`) quase nunca ativava em vídeos reais de 2 pessoas. Causa raiz medida em footage real (podcast 1920x1080): `_MIN_FACE_AREA_RATIO` (1%) descartava os dois rostos na maioria dos frames, porque em enquadramento de 2 pessoas dividindo o frame os rostos reais ficam entre ~0.7%-1.4% da área — bem em cima do corte antigo. Ajustado pra 0.6% (medido: falsos-positivos de fundo ficam em ~0.4-0.5%, dá margem segura). Resultado no teste real: 0% → ~61% do tempo em split-screen, sem falso-positivo em vídeo de 1 pessoa (regressão testada).
 - `_debounce_mode` exigia detecção **contínua e sem falhas** por 1.2s pra confirmar troca de modo — qualquer soluço isolado de detecção reiniciava a contagem do zero. Trocado por voto de maioria numa janela deslizante (65% das amostras) — tolera falhas pontuais de detecção sem reiniciar a janela inteira.
