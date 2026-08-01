@@ -10,6 +10,12 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 ### Adicionado
 - Histórico de execuções em SQLite (`data/shortsgen.db`): estados do pipeline (`running`/`success`/`error`), mensagem de erro e tempo por etapa (download, transcrição, highlights, render).
 - Comando `shortsgen stats`: shorts gerados hoje, execuções com erro hoje e tempo médio por etapa.
+- Comando `shortsgen tui`: painel interativo em Textual — status dos serviços e estatísticas do dia atualizando sozinhos a cada 5s, com um campo para colar uma URL/arquivo e rodar o pipeline dali mesmo, acompanhando o progresso ao vivo (etapa atual, barra de progresso por clipe e log da execução).
+- `pipeline_runner.py`: orquestração do pipeline extraída do `cli.py` para um `ProgressReporter` reutilizável — CLI (`rich`) e TUI (`textual`) compartilham a mesma lógica, cada um só troca como o progresso é exibido.
+- `health.py` e `get_daily_stats` (em `history.py`): checks do `doctor` e cálculo de estatísticas viraram funções compartilhadas, reaproveitadas tanto pela CLI quanto pelo TUI.
+
+### Corrigido
+- Reporter do TUI agora falha de forma silenciosa (só loga) se o painel já tiver sido fechado enquanto uma execução ainda rodava em background — antes, essa falha de UI podia sobrescrever o resultado real da execução no histórico.
 
 ## [0.1.0] - Quartzo - 2026-08-01
 

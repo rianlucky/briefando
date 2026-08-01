@@ -15,6 +15,7 @@ dependencies = [
     "mediapipe>=0.10.14",
     "ffmpeg-python>=0.2.0",
     "rich>=13.9",
+    "textual>=8.2.8",
 ]
 
 [project.scripts]

@@ -38,6 +38,12 @@ Todo run fica registrado em `data/shortsgen.db` (SQLite): estado (rodando/sucess
 uv run python -m shortsgen.cli stats
 ```
 
+Ou abra o painel interativo (Textual) — mostra status dos serviços e estatisticas do dia ao vivo, e deixa colar uma URL/arquivo e acompanhar o progresso da execucao (etapa atual, barra de progresso por clipe, log em tempo real) sem sair do painel:
+
+```sh
+uv run python -m shortsgen.cli tui
+```
+
 > Nesta maquina, o antivirus bloqueia o executavel `shortsgen.exe` que o uv gera
 > (launcher generico nao assinado). Por isso rodamos via `python -m shortsgen.cli`
 > em vez de `uv run shortsgen`. Se isso nao acontecer na sua maquina, `uv run shortsgen`

@@ -40,11 +40,11 @@
 
 ## Interface
 
-- [ ] TUI
-- [ ] Barra de progresso
-- [ ] Pipeline em tempo real
-- [ ] Status dos serviços
-- [ ] Estatísticas do dia
+- [x] TUI (`shortsgen tui`, Textual — painel interativo, 2026-08-01)
+- [x] Barra de progresso (progresso ao vivo por clipe dentro do painel, 2026-08-01)
+- [x] Pipeline em tempo real (painel dispara e acompanha o `run_pipeline` numa worker thread, 2026-08-01)
+- [x] Status dos serviços (checks de `doctor` reaproveitados no painel, atualizando a cada 5s, 2026-08-01)
+- [x] Estatísticas do dia (painel de stats reaproveitando `get_daily_stats`, atualizando a cada 5s, 2026-08-01)
 
 ## Pipeline
 

@@ -77,3 +77,34 @@ class RunRecorder:
         )
         self._conn.commit()
         self._conn.close()
+
+
+def get_daily_stats(db_path: Path) -> dict:
+    """Shorts gerados hoje, execucoes com erro hoje e tempo medio por etapa.
+
+    Fonte unica reutilizada pelo comando `stats` (CLI) e pelo painel de
+    estatisticas do TUI.
+    """
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    clips_today = conn.execute(
+        "SELECT COALESCE(SUM(clips_generated), 0) FROM runs WHERE status = 'success' AND started_at LIKE ?",
+        (f"{today}%",),
+    ).fetchone()[0]
+    errors_today = conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE status = 'error' AND started_at LIKE ?",
+        (f"{today}%",),
+    ).fetchone()[0]
+    stage_rows = conn.execute(
+        "SELECT stage, AVG((julianday(finished_at) - julianday(started_at)) * 86400.0) AS avg_seconds "
+        "FROM run_stages WHERE finished_at IS NOT NULL GROUP BY stage"
+    ).fetchall()
+    conn.close()
+
+    return {
+        "clips_today": clips_today,
+        "errors_today": errors_today,
+        "stage_avgs": {row["stage"]: row["avg_seconds"] for row in stage_rows},
+    }
