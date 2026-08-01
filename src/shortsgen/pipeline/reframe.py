@@ -1,4 +1,5 @@
 import urllib.request
+from collections import deque
 from pathlib import Path
 
 import cv2
@@ -13,11 +14,23 @@ TARGET_ASPECT = 9 / 16
 
 # Ignora rostos muito pequenos em relacao ao frame (plateia, fundo, reflexo) pra
 # nao disparar split-screen por engano.
-_MIN_FACE_AREA_RATIO = 0.01
+# Medido em video real de podcast 1920x1080 com 2 pessoas dividindo o frame
+# (2026-08-01): rostos de verdade ficam entre ~0.007 e ~0.014 da area do
+# frame; falsos positivos de fundo ficaram em ~0.004-0.005. 0.01 cortava boa
+# parte dos rostos reais por estar bem no meio dessa faixa.
+_MIN_FACE_AREA_RATIO = 0.006
 
-# So efetiva a troca entre split-screen e foco-em-1-pessoa depois que o novo
-# padrao persistir por esse tanto de tempo -- evita "piscar" entre os dois modos.
+# Janela deslizante (em segundos) usada pra decidir entre split-screen e
+# foco-em-1-pessoa -- evita "piscar" entre os dois modos.
 _MODE_CONFIRM_SECONDS = 1.2
+
+# Fracao das amostras dentro da janela que precisa concordar com um modo pra
+# ele ser confirmado. Antes exigiamos 100% (qualquer soluco de deteccao -
+# pessoa vira o rosto, gesticula na frente, confianca cai um instante -
+# reiniciava a contagem do zero, e na pratica o split-screen quase nunca
+# disparava). Com maioria (nao unanimidade), soluços isolados nao acabam
+# mais com a janela inteira.
+_MODE_MAJORITY_RATIO = 0.65
 
 # API antiga (mp.solutions.face_detection) foi removida em mediapipe >= 1.0 --
 # a partir dela usamos a API nova "Tasks", que exige baixar o modelo .tflite.
@@ -118,21 +131,30 @@ def _build_tracks(samples: list[tuple[float, list[tuple[float, float]]]], frame_
 
 
 def _debounce_mode(raw_mode: list[tuple[float, int]]) -> list[tuple[float, int]]:
-    """So confirma a troca de modo depois que o novo padrao persistir por
-    _MODE_CONFIRM_SECONDS seguidos."""
+    """Confirma a troca de modo por maioria numa janela deslizante de
+    _MODE_CONFIRM_SECONDS, em vez de exigir unanimidade -- uma detecção
+    perdida isolada não derruba mais a janela inteira."""
     if not raw_mode:
         return raw_mode
+
     committed = raw_mode[0][1]
-    pending_mode = committed
-    pending_since = raw_mode[0][0]
-    out = [(raw_mode[0][0], committed)]
-    for t, mode in raw_mode[1:]:
-        if mode != pending_mode:
-            pending_mode = mode
-            pending_since = t
-        if pending_mode != committed and (t - pending_since) >= _MODE_CONFIRM_SECONDS:
-            committed = pending_mode
+    window: deque[tuple[float, int]] = deque()
+    out = []
+
+    for t, mode in raw_mode:
+        window.append((t, mode))
+        while window and t - window[0][0] > _MODE_CONFIRM_SECONDS:
+            window.popleft()
+
+        twos_ratio = sum(1 for _, m in window if m == 2) / len(window)
+        if twos_ratio >= _MODE_MAJORITY_RATIO:
+            committed = 2
+        elif (1 - twos_ratio) >= _MODE_MAJORITY_RATIO:
+            committed = 1
+        # sem maioria clara na janela: mantem o modo ja confirmado
+
         out.append((t, committed))
+
     return out
 
 
