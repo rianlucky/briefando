@@ -19,6 +19,9 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 - Botão **Cancelar** no painel: interrompe download, highlights e render (ffmpeg/reframe mortos na hora via `cancel_event`) de forma limpa. A transcrição (Whisper) não tem ponto de interrupção no meio — o cancelamento nesse caso só é aplicado assim que a transcrição atual terminar. Novo estado `cancelled` no histórico (distinto de `error`).
 
 ### Corrigido
+- `work_dir`/`output_dir`/`log_dir`/`db_path`/`.env` agora são resolvidos sempre em relação à raiz do projeto (onde está o `pyproject.toml`), não mais em relação ao diretório de onde o comando foi chamado. Antes, rodar o CLI/TUI de dentro de `output/` (por exemplo) recriava silenciosamente `temp/`, `output/`, `logs/` e `data/` aninhados ali dentro.
+
+### Corrigido
 - Reporter do TUI agora falha de forma silenciosa (só loga) se o painel já tiver sido fechado enquanto uma execução ainda rodava em background — antes, essa falha de UI podia sobrescrever o resultado real da execução no histórico.
 
 ## [0.1.0] - Quartzo - 2026-08-01
