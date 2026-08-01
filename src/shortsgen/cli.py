@@ -2,14 +2,17 @@ import logging
 import os
 import re
 import shutil
+import sqlite3
 import unicodedata
 import uuid
+from datetime import datetime
 from pathlib import Path
 
 import typer
 from rich.console import Console
 
 from shortsgen.config import settings
+from shortsgen.history import RunRecorder, connect as connect_history
 from shortsgen.logging_setup import configure_logging
 from shortsgen.models import Transcript
 from shortsgen.pipeline.captions import build_ass_captions
@@ -61,20 +64,28 @@ def generate(
     run_dir = settings.work_dir / run_id
     run_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Iniciando run %s para source=%r", run_id, source)
+    recorder = RunRecorder(settings.db_path, run_id, source)
 
     try:
+        recorder.start_stage("download")
         video_path = _resolve_source(source, run_dir)
+        recorder.end_stage("download")
 
         console.print("[cyan]Transcrevendo audio (faster-whisper)...[/cyan]")
+        recorder.start_stage("transcricao")
         transcript: Transcript = transcribe(video_path)
+        recorder.end_stage("transcricao")
         console.print(f"[green]Transcricao concluida.[/green] Idioma detectado: {transcript.language}")
         logger.info("Transcricao concluida (run %s). Idioma: %s", run_id, transcript.language)
 
         console.print("[cyan]Perguntando ao Gemini quais trechos cortar...[/cyan]")
+        recorder.start_stage("highlights")
         highlight_list = find_highlights(transcript)
+        recorder.end_stage("highlights")
         console.print(f"[green]{len(highlight_list.highlights)} highlight(s) encontrado(s).[/green]")
         logger.info("%d highlight(s) encontrado(s) (run %s)", len(highlight_list.highlights), run_id)
 
+        recorder.start_stage("render")
         for idx, highlight in enumerate(highlight_list.highlights, start=1):
             console.print(
                 f"\n[bold]Clipe {idx}/{len(highlight_list.highlights)}[/bold]: "
@@ -100,12 +111,15 @@ def generate(
             output_path = settings.output_dir / f"{idx:02d}-{slug}.mp4"
             console.print(f"  Renderizando final -> {output_path}")
             mux_final(clip_vertical, clip_raw, clip_ass, output_path)
+        recorder.end_stage("render")
 
         console.print(f"\n[bold green]Pronto! {len(highlight_list.highlights)} clipe(s) em {settings.output_dir}[/bold green]")
         logger.info("Run %s concluida com sucesso: %d clipe(s)", run_id, len(highlight_list.highlights))
-    except Exception:
+        recorder.mark_success(len(highlight_list.highlights))
+    except Exception as exc:
         console.print(f"[red]Erro no processamento.[/red] Arquivos parciais preservados em: {run_dir}")
         logger.exception("Run %s falhou", run_id)
+        recorder.mark_error(str(exc))
         raise
     else:
         if not keep_temp:
@@ -139,6 +153,39 @@ def doctor() -> None:
         raise typer.Exit(1)
 
     console.print("\n[bold green]Tudo OK.[/bold green]")
+
+
+@app.command()
+def stats() -> None:
+    """Mostra estatisticas de execucao: shorts gerados hoje, execucoes com erro hoje e tempo medio por etapa."""
+    conn = connect_history(settings.db_path)
+    conn.row_factory = sqlite3.Row
+
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    clips_today = conn.execute(
+        "SELECT COALESCE(SUM(clips_generated), 0) FROM runs WHERE status = 'success' AND started_at LIKE ?",
+        (f"{today}%",),
+    ).fetchone()[0]
+    errors_today = conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE status = 'error' AND started_at LIKE ?",
+        (f"{today}%",),
+    ).fetchone()[0]
+
+    console.print(f"Shorts gerados hoje: {clips_today}")
+    console.print(f"Execucoes com erro hoje: {errors_today}")
+
+    console.print("\nTempo medio por etapa:")
+    rows = conn.execute(
+        "SELECT stage, AVG((julianday(finished_at) - julianday(started_at)) * 86400.0) AS avg_seconds "
+        "FROM run_stages WHERE finished_at IS NOT NULL GROUP BY stage"
+    ).fetchall()
+    if not rows:
+        console.print("  (sem dados ainda)")
+    for row in rows:
+        console.print(f"  {row['stage']}: {row['avg_seconds']:.1f}s")
+
+    conn.close()
 
 
 def main() -> None:

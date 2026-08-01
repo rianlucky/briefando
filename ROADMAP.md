@@ -48,17 +48,17 @@
 
 ## Pipeline
 
-- [ ] Estados do pipeline
-- [ ] Histórico SQLite
-- [ ] Histórico de erros
-- [ ] Tempo por etapa
+- [x] Estados do pipeline (`runs.status`: running/success/error, 2026-08-01)
+- [x] Histórico SQLite (`data/shortsgen.db`, tabelas `runs`/`run_stages`, 2026-08-01)
+- [x] Histórico de erros (`runs.error_message`, 2026-08-01)
+- [x] Tempo por etapa (granularidade grosseira: download/transcrição/highlights/render, 2026-08-01)
 
 ## Monitoramento
 
-- [ ] Tempo médio
-- [ ] Shorts criados hoje
-- [ ] Shorts publicados
-- [ ] Shorts com erro
+- [x] Tempo médio (comando `shortsgen stats`, 2026-08-01)
+- [x] Shorts criados hoje (comando `shortsgen stats`, 2026-08-01)
+- [ ] Shorts publicados (depende da etapa de publicação, ainda não implementada)
+- [x] Shorts com erro (comando `shortsgen stats`, 2026-08-01)
 
 ---
 

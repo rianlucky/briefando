@@ -16,6 +16,7 @@ class Settings(BaseSettings):
     work_dir: Path = Path("temp")
     output_dir: Path = Path("output")
     log_dir: Path = Path("logs")
+    db_path: Path = Path("data/shortsgen.db")
 
     max_clips: int = 5
     clip_min_seconds: int = 20
@@ -26,3 +27,4 @@ settings = Settings()
 settings.work_dir.mkdir(parents=True, exist_ok=True)
 settings.output_dir.mkdir(parents=True, exist_ok=True)
 settings.log_dir.mkdir(parents=True, exist_ok=True)
+settings.db_path.parent.mkdir(parents=True, exist_ok=True)

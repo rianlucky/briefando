@@ -32,6 +32,12 @@ uv run python -m shortsgen.cli doctor
 
 Logs de cada execucao (incluindo tracebacks de erro) ficam em `logs/shortsgen.log`. Em caso de falha, os arquivos temporarios da execucao (`temp/<run_id>/`) sao preservados em vez de apagados, pra nao perder o download/transcricao ja feitos.
 
+Todo run fica registrado em `data/shortsgen.db` (SQLite): estado (rodando/sucesso/erro), tempo gasto em cada etapa e mensagem de erro quando falha. Pra ver um resumo:
+
+```sh
+uv run python -m shortsgen.cli stats
+```
+
 > Nesta maquina, o antivirus bloqueia o executavel `shortsgen.exe` que o uv gera
 > (launcher generico nao assinado). Por isso rodamos via `python -m shortsgen.cli`
 > em vez de `uv run shortsgen`. Se isso nao acontecer na sua maquina, `uv run shortsgen`

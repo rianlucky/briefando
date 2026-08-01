@@ -7,6 +7,10 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+### Adicionado
+- Histórico de execuções em SQLite (`data/shortsgen.db`): estados do pipeline (`running`/`success`/`error`), mensagem de erro e tempo por etapa (download, transcrição, highlights, render).
+- Comando `shortsgen stats`: shorts gerados hoje, execuções com erro hoje e tempo médio por etapa.
+
 ## [0.1.0] - Quartzo - 2026-08-01
 
 Primeira versão versionada do projeto — MVP funcional + Fase 1 (Fundação) do roadmap.
