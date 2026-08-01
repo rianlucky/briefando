@@ -37,6 +37,7 @@ class Settings(BaseSettings):
     whisper_model_size: str = "small"
     whisper_device: str = "auto"
     whisper_compute_type: str = "default"
+    whisper_cpu_threads: int = 4
 
     work_dir: Path = Path("temp")
     output_dir: Path = Path("output")

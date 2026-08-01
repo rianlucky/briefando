@@ -20,9 +20,10 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ### Corrigido
 - `work_dir`/`output_dir`/`log_dir`/`db_path`/`.env` agora são resolvidos sempre em relação à raiz do projeto (onde está o `pyproject.toml`), não mais em relação ao diretório de onde o comando foi chamado. Antes, rodar o CLI/TUI de dentro de `output/` (por exemplo) recriava silenciosamente `temp/`, `output/`, `logs/` e `data/` aninhados ali dentro.
-
-### Corrigido
 - Reporter do TUI agora falha de forma silenciosa (só loga) se o painel já tiver sido fechado enquanto uma execução ainda rodava em background — antes, essa falha de UI podia sobrescrever o resultado real da execução no histórico.
+
+### Performance
+- `WHISPER_CPU_THREADS=4` (novo, configurável): benchmark real mostrou 4 threads explícitos ~9% mais rápido que o padrão implícito da lib e que usar os 8 threads lógicos (SMT) da CPU — matriz/CPU-bound não ganha com hyperthreading, só sofre contenção. Ajustar pro número de núcleos físicos da CPU, não threads lógicos.
 
 ## [0.1.0] - Quartzo - 2026-08-01
 
