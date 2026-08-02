@@ -32,6 +32,10 @@ class Highlight(BaseModel):
     end: float
     title: str
     reason: str
+    description: str
+    tags: list[str]
+    hashtags: list[str]
+    category: str
 
 
 class HighlightList(BaseModel):

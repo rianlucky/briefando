@@ -1,6 +1,6 @@
 # 🚀 Briefando Roadmap
 
->Status: Fase 2 concluída ✅ — Fase 3 (Automação) em andamento
+>Status: Fase 3 concluída ✅ — próxima: Fase 4 (Inteligência)
 
 ---
 
@@ -62,34 +62,36 @@
 
 ---
 
-# ⚙️ FASE 3 — Automação 🚧 (em andamento)
+# ⚙️ FASE 3 — Automação ✅ (concluída 2026-08-02)
 
 ## Fila
 
-- [ ] Queue
-- [ ] Evitar duplicações
-- [ ] Retomar processamento
+- [x] Queue
+- [x] Evitar duplicações
+- [x] Retomar processamento
 
 ## Publicação
 
-- [ ] Scheduler
-- [ ] Máximo de 3 Shorts/dia
-- [ ] Horários configuráveis
+- [x] Scheduler
+- [x] Máximo de 3 Shorts/dia
+- [x] Horários configuráveis
+
+(implementado via n8n, 2026-08-01: Schedule Trigger com 3 regras de cron, cada uma publicando 1 clipe — o limite diário nasce do próprio agendamento, sem lógica de contagem em código)
 
 ## Metadata
 
-- [ ] Título
-- [ ] Descrição
-- [ ] Tags
-- [ ] Hashtags
-- [ ] Categoria
+- [x] Título
+- [x] Descrição
+- [x] Tags
+- [x] Hashtags
+- [x] Categoria
 
 ## Confiabilidade
 
-- [ ] Retry Whisper
-- [ ] Retry Gemini
-- [ ] Retry Upload
-- [ ] Idempotência
+- [x] Retry Whisper
+- [x] Retry Gemini
+- [x] Retry Upload
+- [x] Idempotência
 
 ---
 

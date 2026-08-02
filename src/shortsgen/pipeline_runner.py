@@ -16,7 +16,7 @@ from shortsgen.history import RunRecorder, get_transcription_factor
 from shortsgen.models import Transcript
 from shortsgen.pipeline.captions import build_ass_captions
 from shortsgen.pipeline.download import download_video
-from shortsgen.pipeline.highlights import find_highlights
+from shortsgen.pipeline.highlights import DEFAULT_CATEGORY_ID, YOUTUBE_CATEGORIES, find_highlights
 from shortsgen.pipeline.reframe import reframe_to_vertical
 from shortsgen.pipeline.render import cut_segment, mux_final
 from shortsgen.pipeline.transcribe import transcribe
@@ -91,6 +91,21 @@ def _probe_duration(path: Path) -> float | None:
         return float(result.stdout.strip())
     except Exception:
         return None
+
+
+def _retry(fn, *, attempts: int, delay: float, on_retry=None):
+    """Chama `fn()`, tentando de novo ate `attempts` vezes se ela levantar excecao
+    (falhas transitorias de rede/API). Repassa a excecao original apos a ultima
+    tentativa. `on_retry(attempt, exc)` e chamado antes de cada nova tentativa."""
+    for attempt in range(1, attempts + 1):
+        try:
+            return fn()
+        except Exception as exc:
+            if attempt == attempts:
+                raise
+            if on_retry:
+                on_retry(attempt, exc)
+            time.sleep(delay)
 
 
 def _run_with_progress_ticks(work, on_tick, interval: float = 2.0):
@@ -203,8 +218,19 @@ def run_pipeline(
                 estimated_total = max(duration * factor, 1.0)
                 reporter.transcription_progress(min(99.0, elapsed / estimated_total * 100))
 
+        def _on_transcribe_retry(attempt: int, exc: Exception) -> None:
+            reporter.message(f"  Transcricao falhou (tentativa {attempt}): {exc}. Tentando de novo...")
+            logger.warning("Transcricao falhou (run %s, tentativa %d): %s", run_id, attempt, exc)
+
         transcript: Transcript = _run_with_progress_ticks(
-            lambda: transcribe(video_path), _on_transcribe_tick, interval=2.0
+            lambda: _retry(
+                lambda: transcribe(video_path),
+                attempts=settings.pipeline_retry_attempts,
+                delay=settings.pipeline_retry_delay_seconds,
+                on_retry=_on_transcribe_retry,
+            ),
+            _on_transcribe_tick,
+            interval=2.0,
         )
         recorder.end_stage("transcricao")
         reporter.transcription_progress(100.0)
@@ -214,7 +240,16 @@ def run_pipeline(
         _check_cancelled()
         reporter.stage_started("highlights")
         recorder.start_stage("highlights")
-        highlight_list = find_highlights(transcript)
+        def _on_highlights_retry(attempt: int, exc: Exception) -> None:
+            reporter.message(f"  Gemini falhou (tentativa {attempt}): {exc}. Tentando de novo...")
+            logger.warning("Gemini falhou (run %s, tentativa %d): %s", run_id, attempt, exc)
+
+        highlight_list = _retry(
+            lambda: find_highlights(transcript),
+            attempts=settings.pipeline_retry_attempts,
+            delay=settings.pipeline_retry_delay_seconds,
+            on_retry=_on_highlights_retry,
+        )
         recorder.end_stage("highlights")
         reporter.message(f"{len(highlight_list.highlights)} highlight(s) encontrado(s).")
         logger.info("%d highlight(s) encontrado(s) (run %s)", len(highlight_list.highlights), run_id)
@@ -250,6 +285,14 @@ def run_pipeline(
             output_path = settings.output_dir / f"{idx:02d}-{slug}.mp4"
             reporter.message(f"  Renderizando final -> {output_path}")
             mux_final(clip_vertical, clip_raw, clip_ass, output_path, cancel_event=cancel_event)
+            recorder.record_clip(
+                str(output_path),
+                highlight.title,
+                highlight.description,
+                highlight.tags,
+                highlight.hashtags,
+                YOUTUBE_CATEGORIES.get(highlight.category, DEFAULT_CATEGORY_ID),
+            )
         recorder.end_stage("render")
         reporter.clip_progress(total, total)
 

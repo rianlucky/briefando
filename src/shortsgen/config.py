@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     clip_min_seconds: int = 20
     clip_max_seconds: int = 90
 
+    queue_max_retries: int = 3
+    clip_retention_days: int = 10
+
+    pipeline_retry_attempts: int = 3
+    pipeline_retry_delay_seconds: float = 5.0
+
 
 settings = Settings()
 settings.work_dir = _anchor(settings.work_dir)

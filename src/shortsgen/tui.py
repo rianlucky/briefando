@@ -10,15 +10,26 @@ from textual.widgets import Button, Footer, Header, Input, ProgressBar, RichLog,
 
 from shortsgen.config import settings
 from shortsgen.health import run_checks
-from shortsgen.history import get_daily_stats
+from shortsgen.history import (
+    DuplicateQueueItem,
+    claim_item,
+    get_clips_counts,
+    get_daily_stats,
+    get_queue_counts,
+    mark_queue_done,
+    mark_queue_error,
+    reset_queue_item_to_pending,
+)
 from shortsgen.logging_setup import configure_logging
 from shortsgen.pipeline_runner import STAGE_LABELS, ProgressReporter, run_pipeline
+from shortsgen.queue import add_to_queue
 
 configure_logging(settings.log_dir)
 logger = logging.getLogger(__name__)
 
 STATUS_REFRESH_SECONDS = 5
 STATS_REFRESH_SECONDS = 5
+QUEUE_REFRESH_SECONDS = 5
 
 CSS = """
 #input-row {
@@ -41,7 +52,7 @@ CSS = """
     color: $text-muted;
 }
 
-#panels-row {
+#panels-row, #panels-row-2 {
     height: auto;
     padding: 0 1;
 }
@@ -120,6 +131,7 @@ class BriefandoApp(App):
         super().__init__()
         self._job_running = False
         self._cancel_event: threading.Event | None = None
+        self._current_queue_item_id: int | None = None
 
     def compose(self) -> ComposeResult:
         yield Header()
@@ -136,14 +148,23 @@ class BriefandoApp(App):
             with Vertical(classes="panel"):
                 yield Static("Estatisticas do dia", classes="panel-title")
                 yield Static(id="stats-content")
+        with Horizontal(id="panels-row-2"):
+            with Vertical(classes="panel"):
+                yield Static("Fila", classes="panel-title")
+                yield Static(id="queue-content")
+            with Vertical(classes="panel"):
+                yield Static("Publicacao", classes="panel-title")
+                yield Static(id="clips-content")
         yield RichLog(id="run-log", wrap=True, markup=True)
         yield Footer()
 
     def on_mount(self) -> None:
         self.refresh_status()
         self.refresh_stats()
+        self.refresh_queue()
         self.set_interval(STATUS_REFRESH_SECONDS, self.refresh_status)
         self.set_interval(STATS_REFRESH_SECONDS, self.refresh_stats)
+        self.set_interval(QUEUE_REFRESH_SECONDS, self.refresh_queue)
 
     def refresh_status(self) -> None:
         lines = []
@@ -165,6 +186,23 @@ class BriefandoApp(App):
         else:
             lines.extend(f"  {stage}: {avg_seconds:.1f}s" for stage, avg_seconds in data["stage_avgs"].items())
         self.query_one("#stats-content", Static).update("\n".join(lines))
+
+    def refresh_queue(self) -> None:
+        queue = get_queue_counts(settings.db_path)
+        queue_lines = [
+            f"Pendentes: {queue['pending']}",
+            f"Rodando: {queue['running']}",
+            f"Concluidos: {queue['done']}",
+            f"Com erro: {queue['error']}",
+        ]
+        self.query_one("#queue-content", Static).update("\n".join(queue_lines))
+
+        clips = get_clips_counts(settings.db_path)
+        clips_lines = [
+            f"Aguardando publicar: {clips['pending']}",
+            f"Publicados: {clips['published']}",
+        ]
+        self.query_one("#clips-content", Static).update("\n".join(clips_lines))
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "run-button":
@@ -188,6 +226,15 @@ class BriefandoApp(App):
         source = self.query_one("#source-input", Input).value.strip()
         if not source:
             return
+
+        try:
+            item_id = add_to_queue(source)
+        except DuplicateQueueItem as exc:
+            self.append_log(f"[yellow]{exc}[/yellow]")
+            return
+        claim_item(settings.db_path, item_id)
+        self._current_queue_item_id = item_id
+        self.refresh_queue()
 
         self._job_running = True
         self._cancel_event = threading.Event()
@@ -230,24 +277,34 @@ class BriefandoApp(App):
     def _reset_job_state(self) -> None:
         self._job_running = False
         self._cancel_event = None
+        self._current_queue_item_id = None
         self.query_one("#run-button", Button).disabled = False
         self.query_one("#cancel-button", Button).disabled = True
         self.query_one("#stage-label", Static).update("Nenhuma execucao em andamento")
 
     def handle_run_finished(self, clips: int, output_dir: Path) -> None:
         self.append_log(f"[bold green]Pronto! {clips} clipe(s) em {output_dir}[/bold green]")
+        if self._current_queue_item_id is not None:
+            mark_queue_done(settings.db_path, self._current_queue_item_id)
         self._reset_job_state()
         self.refresh_stats()
+        self.refresh_queue()
 
     def handle_run_failed(self, error: str, run_dir: Path) -> None:
         self.append_log(f"[red]Erro: {error}[/red] (arquivos preservados em {run_dir})")
+        if self._current_queue_item_id is not None:
+            mark_queue_error(settings.db_path, self._current_queue_item_id, error, settings.queue_max_retries)
         self._reset_job_state()
         self.refresh_stats()
+        self.refresh_queue()
 
     def handle_run_cancelled(self, run_dir: Path) -> None:
         self.append_log(f"[yellow]Execucao cancelada.[/yellow] Arquivos parciais em {run_dir}")
+        if self._current_queue_item_id is not None:
+            reset_queue_item_to_pending(settings.db_path, self._current_queue_item_id)
         self._reset_job_state()
         self.refresh_stats()
+        self.refresh_queue()
 
 
 def main() -> None:

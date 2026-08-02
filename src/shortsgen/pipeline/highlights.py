@@ -9,6 +9,20 @@ from shortsgen.pipeline.text_clean import clean_for_prompt
 
 _GEMINI_TIMEOUT_MS = 60_000
 
+YOUTUBE_CATEGORIES = {
+    "Comédia": "23",
+    "Entretenimento": "24",
+    "Pessoas e Blogs": "22",
+    "Esportes": "17",
+    "Educação": "27",
+    "Notícias e Política": "25",
+    "Jogos": "20",
+    "Música": "10",
+    "Ciência e Tecnologia": "28",
+    "Como Fazer e Estilo": "26",
+}
+DEFAULT_CATEGORY_ID = YOUTUBE_CATEGORIES["Pessoas e Blogs"]
+
 SYSTEM_PROMPT = """Voce e um editor de video especialista em cortar clipes virais para YouTube Shorts, TikTok e Reels a partir de transcricoes de videos longos (podcasts, entrevistas, palestras, lives).
 
 Sua tarefa: analisar a transcricao com timestamps e apontar os melhores trechos para virar shorts standalone e envolventes.
@@ -19,6 +33,12 @@ Criterios para um bom highlight:
 - Contem uma ideia completa: uma virada, uma piada, um dado surpreendente, uma historia ou um conselho acionavel
 - Duracao entre {min_s} e {max_s} segundos
 - Os timestamps de inicio e fim devem coincidir com o inicio/fim de frases da transcricao, nunca cortando uma ideia no meio
+
+Alem do corte, gere tambem os metadados de publicacao de cada clipe:
+- description: 2-3 frases descrevendo o clipe pro YouTube, sem hashtags (elas vao a parte)
+- tags: 5-8 palavras-chave de busca relacionadas ao conteudo, sem o caractere #
+- hashtags: 2-4 hashtags relevantes, sem o caractere #, sempre incluindo "shorts"
+- category: a categoria do YouTube mais adequada, escolhida entre as opcoes fornecidas
 
 A transcricao abaixo teve vicios de linguagem e repeticoes removidos para ficar mais enxuta -- isso e so limpeza de texto, ignore pequenas quebras no fraseado.
 
@@ -48,8 +68,36 @@ HIGHLIGHT_SCHEMA = {
                         "type": "string",
                         "description": "por que esse trecho funciona bem como short",
                     },
+                    "description": {
+                        "type": "string",
+                        "description": "descricao do clipe pro YouTube, 2-3 frases, sem hashtags",
+                    },
+                    "tags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "5-8 palavras-chave de busca, sem #",
+                    },
+                    "hashtags": {
+                        "type": "array",
+                        "items": {"type": "string"},
+                        "description": "2-4 hashtags relevantes, sem #, sempre incluindo 'shorts'",
+                    },
+                    "category": {
+                        "type": "string",
+                        "enum": list(YOUTUBE_CATEGORIES.keys()),
+                        "description": "categoria do YouTube mais adequada pra esse clipe",
+                    },
                 },
-                "required": ["start", "end", "title", "reason"],
+                "required": [
+                    "start",
+                    "end",
+                    "title",
+                    "reason",
+                    "description",
+                    "tags",
+                    "hashtags",
+                    "category",
+                ],
                 "additionalProperties": False,
             },
         },

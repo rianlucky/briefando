@@ -7,6 +7,26 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.3.0] - Ametista - 2026-08-02
+
+Fase 3 (Automação) do roadmap concluída.
+
+### Adicionado
+- Fila de processamento (`shortsgen queue add/list/run/retry`): tabela `queue` em SQLite com deduplicação por chave normalizada (ID do vídeo pra URLs do YouTube, caminho absoluto resolvido pra arquivos locais) via índice único parcial (só considera itens pendentes/rodando, não bloqueia reprocessar depois). Itens travados em `running` por uma execução anterior interrompida são recuperados automaticamente na próxima chamada de `queue run`. Retry automático configurável via `QUEUE_MAX_RETRIES` (padrão 3 tentativas no total); esgotado o limite, o item vira erro terminal e pode ser reenfileirado manualmente com `queue retry <id>`.
+- Rastreamento de publicação (`shortsgen clips list/next-pending/mark-published`): tabela `clips` em SQLite registra cada clipe gerado (`run_id`, caminho, título) e seu status de publicação. `clips next-pending` imprime o próximo clipe não publicado em JSON puro, pensado pra automação externa (ex.: n8n via node Execute Command) buscar o que falta subir e marcar como publicado depois do upload, sem precisar de node de banco de dados dedicado.
+- Fluxo de publicação ponta a ponta via n8n: Schedule Trigger (3 horários/dia) → `queue run` → `clips next-pending` → upload no YouTube → `clips mark-published`. Testado com vídeo real, upload confirmado. `output_dir` servido via `python -m http.server` local pro node HTTP Request do n8n ler o binário (workaround pra uma incompatibilidade do node nativo `Read/Write Files from Disk` nesta máquina).
+- Metadata automática de publicação: o mesmo pedido ao Gemini que gera os highlights agora também gera descrição, tags, hashtags e categoria (mapeada para o ID oficial do YouTube a partir de uma lista fixa de 10 categorias). `clips next-pending` já devolve tudo pronto pro upload (descrição com hashtags anexadas, tags como lista, `category_id`).
+- Painéis de Fila e Publicação na TUI: contagens (pendente/rodando/concluído/erro da fila; aguardando publicar/publicados) atualizando a cada 5s, mesmo padrão dos painéis existentes.
+- `shortsgen tui` agora sobe automaticamente o n8n e o servidor de arquivos de `output/` (cada um numa janela própria, com as variáveis de ambiente certas) se ainda não estiverem rodando — não duplica se já estiverem de pé.
+- O botão "Gerar" da TUI agora também passa pela fila (`queue add` + acompanhamento do mesmo item), não só o `queue run` externo — o painel de Fila reflete qualquer execução, venha de onde vier. Cancelamento pela TUI devolve o item pra `pending` sem contar como erro de retry.
+- `shortsgen clips cleanup`: apaga do disco os clipes publicados há mais de `CLIP_RETENTION_DAYS` dias (padrão 10, configurável via `.env`), marcando `deleted_at` no banco pra não tentar de novo.
+- `shortsgen clips archive <id>`: move o arquivo do clipe pra `output/postado/` e atualiza o caminho no banco na mesma operação, mantendo o `clips cleanup` consistente mesmo depois do arquivo ser movido.
+- `clips next-pending` agora escolhe aleatoriamente entre os clipes pendentes (não mais o mais antigo primeiro) — evita publicar sempre na mesma ordem/sequência dos vídeos processados.
+- Retry automático de transcrição (Whisper) e highlights (Gemini) dentro do próprio pipeline (`PIPELINE_RETRY_ATTEMPTS`, padrão 3, com `PIPELINE_RETRY_DELAY_SECONDS` entre tentativas) — falhas transitórias de rede/API não derrubam a execução inteira nem forçam reprocessar desde o download. `clips mark-published` agora aceita `--video-id` pra guardar o ID do vídeo no YouTube (auditoria). Retry do upload e idempotência do fluxo n8n resolvidos via "Retry On Fail" nos nodes (configuração, não código).
+
+### Corrigido
+- SDK do Gemini corrompia (perda irreversível, não só exibição) títulos de highlight com acentos quando o Python rodava sem modo UTF-8 no Windows (`locale.getpreferredencoding()` caindo pro codepage cp1252 do sistema). Causa raiz confirmada isolando a chamada ao Gemini com/sem `PYTHONUTF8=1`. Novo check em `shortsgen doctor` (`Modo UTF-8 do Python`) detecta o ambiente errado antes de gerar clipes.
+
 ## [0.2.0] - Ágata - 2026-08-01
 
 Fase 2 (Operação) do roadmap concluída.
