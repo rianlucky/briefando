@@ -3,6 +3,8 @@ from typing import Callable
 
 import yt_dlp
 
+from shortsgen.config import settings
+
 
 def download_video(
     url: str,
@@ -28,7 +30,15 @@ def download_video(
         "no_warnings": True,
         "socket_timeout": 30,
         "progress_hooks": [on_progress] if on_progress else [],
+        # YouTube exige resolver um desafio anti-throttling (n-challenge) via
+        # JS pra liberar a maioria dos formatos - sem isso, so sobra thumbnail.
+        # Node ja esta instalado nesta maquina (usado tambem pelo n8n).
+        "js_runtimes": {"node": {}},
     }
+    if settings.ytdlp_cookies_file:
+        ydl_opts["cookiefile"] = settings.ytdlp_cookies_file
+    elif settings.ytdlp_cookies_from_browser:
+        ydl_opts["cookiesfrombrowser"] = (settings.ytdlp_cookies_from_browser,)
     with yt_dlp.YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(url, download=True)
 

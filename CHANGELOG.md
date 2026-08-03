@@ -13,6 +13,9 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 ### Alterado
 - TUI vira um painel de monitoramento puro: removido o disparo manual de vídeo (campo de URL/botões Gerar/Cancelar), já que a descoberta automática + fila cobrem esse caso agora. Novo painel "Atividade atual" mostra em tempo real a etapa, o tempo decorrido e uma barra de progresso estimada (tempo decorrido da etapa / média histórica dessa etapa) de qualquer execução em andamento, lendo direto do banco — funciona pra jobs disparados de qualquer lugar (n8n, `queue run` via CLI), não só pela própria TUI. Novo painel "Execuções recentes" com o histórico das últimas rodadas.
 
+### Corrigido
+- Bloqueio do YouTube ("Sign in to confirm you're not a bot") que travava a fila inteira ao processar muitos vídeos em sequência: yt-dlp agora autentica com cookies exportados do navegador (`YTDLP_COOKIES_FILE`) e usa Node.js como runtime JS pra resolver o desafio anti-throttling do YouTube (pacote `yt-dlp-ejs`), sem os quais quase nenhum formato de vídeo fica disponível. Sem isso, downloads em lote (ex.: descoberta automática processando dezenas de vídeos) paravam de funcionar completamente.
+
 ### Performance
 - Comandos leves da CLI (`queue add`, `sources list`, `clips ...`, etc.) não carregam mais as bibliotecas pesadas do pipeline (mediapipe, faster-whisper, google-genai) à toa — só `generate` e `queue run` (que realmente rodam o pipeline) pagam esse custo agora. Reduz de ~4s pra ~1.3s por chamada, importante para automações que chamam a CLI em lote (ex.: descoberta de vídeos processando dezenas de itens em sequência).
 

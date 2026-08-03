@@ -57,6 +57,9 @@ class Settings(BaseSettings):
     min_quality_score: int = 60
     min_history_for_learning: int = 3
 
+    ytdlp_cookies_from_browser: str | None = None
+    ytdlp_cookies_file: str | None = None
+
 
 settings = Settings()
 settings.work_dir = _anchor(settings.work_dir)
