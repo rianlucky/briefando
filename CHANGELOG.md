@@ -7,17 +7,43 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.5.0] - Esmeralda - 2026-08-03
+
+Fase 5 (Plataforma) iniciada — Dashboard Web completo, mais descoberta automática de vídeos, correções de confiabilidade e uma auditoria de BI/UX.
+
 ### Adicionado
+- **Dashboard Web** (`shortsgen dashboard`, Streamlit): painel visual completo com 8 páginas — Visão Geral (atividade em tempo real, seletor de período Hoje/7 dias/Mês, tempo médio por etapa, funil de conversão Enfileirado→Processado→Aprovado→Publicado, consumo de tokens Gemini e tempo de máquina), Clipes (preview de vídeo, busca por título, aprovação manual), Fila, Analytics (melhores títulos, score×views com linha de tendência e correlação, taxa de engajamento, views por dias-desde-publicação, alerta de limitação de CTR), Fontes, Revisão Manual (fluxo um-a-um) e Histórico (execuções + log filtrado). Estilizado com a paleta da marca (dourado `#FDBB11` / navy `#030811`) e gráficos em Altair/Vega-Lite.
+- Rastreamento real de consumo de tokens do Gemini: `runs.gemini_input_tokens`/`gemini_output_tokens` gravam o uso reportado pela própria API (`response.usage_metadata`) a cada chamada de highlights — dá visibilidade de consumo sem precisar estimar nada.
 - Descoberta automática de vídeos novos: tabela `sources` guarda canais/playlists do YouTube monitorados via RSS (atraso mínimo e duração mínima configuráveis por fonte). `shortsgen sources add/list/remove` gerencia as fontes. `queue add-if-new` adiciona um vídeo à fila só se nunca tiver sido visto antes (em qualquer status), evitando reprocessar o mesmo vídeo repetidamente conforme o feed RSS é revarrido periodicamente. Fluxo completo no n8n: Schedule Trigger → `sources list` → RSS Feed Read por fonte → filtro de atraso → checagem de duração (YouTube Data API) → `queue add-if-new`.
 
 ### Alterado
 - TUI vira um painel de monitoramento puro: removido o disparo manual de vídeo (campo de URL/botões Gerar/Cancelar), já que a descoberta automática + fila cobrem esse caso agora. Novo painel "Atividade atual" mostra em tempo real a etapa, o tempo decorrido e uma barra de progresso estimada (tempo decorrido da etapa / média histórica dessa etapa) de qualquer execução em andamento, lendo direto do banco — funciona pra jobs disparados de qualquer lugar (n8n, `queue run` via CLI), não só pela própria TUI. Novo painel "Execuções recentes" com o histórico das últimas rodadas.
 
 ### Corrigido
+- **Duas execuções de `queue run` simultâneas processavam o mesmo vídeo em paralelo, competindo por CPU e deixando tudo mais lento** (achado ao investigar uma execução real travada a 100% de CPU): `recover_orphans()` assumia que só existe um worker por vez e, ao rodar numa segunda `queue run` disparada pelo n8n antes da primeira terminar, devolvia pra fila um item que a primeira ainda estava processando de verdade — reiniciando o mesmo vídeo do zero em paralelo. Corrigido com um lock exclusivo de sistema operacional em `run_queue()`: uma segunda execução concorrente agora sai na hora sem mexer em nada, em vez de duplicar trabalho.
+- URL enfileirada com `&list=...&index=...` baixava a playlist inteira em vez de só o vídeo (yt-dlp trata isso como playlist por padrão) — `noplaylist: True` adicionado às opções de download.
 - Bloqueio do YouTube ("Sign in to confirm you're not a bot") que travava a fila inteira ao processar muitos vídeos em sequência: yt-dlp agora autentica com cookies exportados do navegador (`YTDLP_COOKIES_FILE`) e usa Node.js como runtime JS pra resolver o desafio anti-throttling do YouTube (pacote `yt-dlp-ejs`), sem os quais quase nenhum formato de vídeo fica disponível. Sem isso, downloads em lote (ex.: descoberta automática processando dezenas de vídeos) paravam de funcionar completamente.
 
 ### Performance
 - Comandos leves da CLI (`queue add`, `sources list`, `clips ...`, etc.) não carregam mais as bibliotecas pesadas do pipeline (mediapipe, faster-whisper, google-genai) à toa — só `generate` e `queue run` (que realmente rodam o pipeline) pagam esse custo agora. Reduz de ~4s pra ~1.3s por chamada, importante para automações que chamam a CLI em lote (ex.: descoberta de vídeos processando dezenas de itens em sequência).
+- Corrigido N+1 query no Analytics: histórico de views dos top-5 clipes vinha de 5 consultas separadas ao banco; agora é 1 consulta só (`get_clip_analytics_history_bulk`).
+
+### Auditoria de BI/UX
+Revisão crítica do dashboard (especialista UI/UX + BI + dados de negócio), aplicada item a item:
+- Tendência ▲/▼ vs período anterior nos números do dia, com seletor de período (Hoje / Últimos 7 dias / Este mês).
+- Linha de tendência (regressão) e correlação de Pearson no gráfico Score do Gemini × Views reais.
+- Gráfico de views recortado por dias-desde-publicação (coorte) em vez de data de calendário, pra comparar clipes publicados em datas diferentes de forma justa.
+- Taxa de engajamento (likes + comentários / views) — mais diagnóstico de qualidade real do conteúdo do que views cru.
+- Funil de conversão Enfileirado → Processado → Aprovado → Publicado, com % de conversão por etapa.
+- Aviso explícito de que CTR/impressões não aparecem por limitação da própria API do YouTube (antes só omitia silenciosamente).
+- Vocabulário visual de card unificado entre todas as páginas (antes misturava HTML customizado com `st.metric` nativo); paleta categórica compartilhada num só módulo (`dashboard/components.py`).
+- Badges coloridos de status (🟢🟡🔵🔴) em Clipes, Fila e Histórico, em vez de texto plano.
+- Links externos da sidebar com ícone.
+- % escrito dentro de cada segmento do gráfico de tempo por etapa, além da legenda.
+- "Pular" na Revisão Manual agora persiste no banco (`clips.review_skipped_at`) e navega por ID do clipe em vez de posição na lista — sobrevive a reload e não quebra mais se um clipe novo chegar no meio da revisão.
+- Nova página "Configurações" (somente leitura) mostrando os parâmetros operacionais atuais (`.env`), antes invisíveis fora do arquivo.
+- Alerta em destaque na Visão Geral quando a fila acumula 5+ itens com erro.
+- Busca por título na página de Clipes, além do filtro por status.
 
 ## [0.4.0] - Topázio - 2026-08-02
 

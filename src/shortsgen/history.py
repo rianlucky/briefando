@@ -1,6 +1,6 @@
 import json
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 
 _SCHEMA = """
@@ -88,6 +88,8 @@ def connect(db_path: Path) -> sqlite3.Connection:
     conn = sqlite3.connect(db_path)
     conn.executescript(_SCHEMA)
     _ensure_column(conn, "runs", "source_duration_seconds", "REAL")
+    _ensure_column(conn, "runs", "gemini_input_tokens", "INTEGER")
+    _ensure_column(conn, "runs", "gemini_output_tokens", "INTEGER")
     _ensure_column(conn, "clips", "description", "TEXT")
     _ensure_column(conn, "clips", "tags", "TEXT")
     _ensure_column(conn, "clips", "hashtags", "TEXT")
@@ -96,6 +98,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
     _ensure_column(conn, "clips", "youtube_video_id", "TEXT")
     _ensure_column(conn, "clips", "quality_score", "INTEGER")
     _ensure_column(conn, "clips", "approved", "INTEGER NOT NULL DEFAULT 0")
+    _ensure_column(conn, "clips", "review_skipped_at", "TEXT")
     return conn
 
 
@@ -155,6 +158,16 @@ class RunRecorder:
         self._conn.execute(
             "UPDATE runs SET source_duration_seconds = ? WHERE run_id = ?",
             (seconds, self._run_id),
+        )
+        self._conn.commit()
+
+    def add_gemini_usage(self, input_tokens: int, output_tokens: int) -> None:
+        self._conn.execute(
+            "UPDATE runs SET "
+            "gemini_input_tokens = COALESCE(gemini_input_tokens, 0) + ?, "
+            "gemini_output_tokens = COALESCE(gemini_output_tokens, 0) + ? "
+            "WHERE run_id = ?",
+            (input_tokens, output_tokens, self._run_id),
         )
         self._conn.commit()
 
@@ -227,23 +240,23 @@ def get_recent_runs(db_path: Path, limit: int = 8) -> list[dict]:
     return [dict(row) for row in rows]
 
 
-def get_daily_stats(db_path: Path) -> dict:
-    """Shorts gerados hoje, execucoes com erro hoje e tempo medio por etapa.
+def get_daily_stats(db_path: Path, target_date: str | None = None) -> dict:
+    """Shorts gerados e execucoes com erro no dia (default hoje), e tempo medio por etapa.
 
-    Fonte unica reutilizada pelo comando `stats` (CLI) e pelo painel de
-    estatisticas do TUI.
+    Fonte unica reutilizada pelo comando `stats` (CLI), pelo painel de
+    estatisticas do TUI e pela tendencia dia-a-dia do dashboard.
     """
     conn = connect(db_path)
     conn.row_factory = sqlite3.Row
-    today = datetime.now().strftime("%Y-%m-%d")
+    day = target_date or datetime.now().strftime("%Y-%m-%d")
 
     clips_today = conn.execute(
         "SELECT COALESCE(SUM(clips_generated), 0) FROM runs WHERE status = 'success' AND started_at LIKE ?",
-        (f"{today}%",),
+        (f"{day}%",),
     ).fetchone()[0]
     errors_today = conn.execute(
         "SELECT COUNT(*) FROM runs WHERE status = 'error' AND started_at LIKE ?",
-        (f"{today}%",),
+        (f"{day}%",),
     ).fetchone()[0]
     stage_rows = conn.execute(
         "SELECT stage, AVG((julianday(finished_at) - julianday(started_at)) * 86400.0) AS avg_seconds "
@@ -255,6 +268,91 @@ def get_daily_stats(db_path: Path) -> dict:
         "clips_today": clips_today,
         "errors_today": errors_today,
         "stage_avgs": {row["stage"]: row["avg_seconds"] for row in stage_rows},
+    }
+
+
+def get_stats_for_range(db_path: Path, start_date: str, end_date: str) -> dict:
+    """Shorts gerados e execucoes com erro num intervalo [start_date, end_date] (inclusive, YYYY-MM-DD).
+
+    Usado pelo seletor de periodo do dashboard (Hoje / Ultimos 7 dias / Este mes).
+    """
+    conn = connect(db_path)
+    end_exclusive = (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    clips = conn.execute(
+        "SELECT COALESCE(SUM(clips_generated), 0) FROM runs "
+        "WHERE status = 'success' AND started_at >= ? AND started_at < ?",
+        (start_date, end_exclusive),
+    ).fetchone()[0]
+    errors = conn.execute(
+        "SELECT COUNT(*) FROM runs WHERE status = 'error' AND started_at >= ? AND started_at < ?",
+        (start_date, end_exclusive),
+    ).fetchone()[0]
+    conn.close()
+
+    return {"clips": clips, "errors": errors}
+
+
+def get_conversion_funnel(db_path: Path, start_date: str, end_date: str, min_quality_score: int) -> list[dict]:
+    """Funil de conversao Enfileirado -> Processado -> Aprovado -> Publicado no
+    intervalo [start_date, end_date] (inclusive, YYYY-MM-DD).
+
+    "Aprovado"/"Publicado" contam videos distintos (run_id), nao clipes, pra
+    manter o funil monotonicamente decrescente mesmo quando um video vira
+    varios clipes. Nao inclui o estagio "Descoberto" (RSS) - videos filtrados
+    antes de chegar na fila nunca tocam esse banco.
+    """
+    conn = connect(db_path)
+    end_exclusive = (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    enfileirado = conn.execute(
+        "SELECT COUNT(*) FROM queue WHERE created_at >= ? AND created_at < ?",
+        (start_date, end_exclusive),
+    ).fetchone()[0]
+    processado = conn.execute(
+        "SELECT COUNT(*) FROM queue WHERE status = 'done' AND created_at >= ? AND created_at < ?",
+        (start_date, end_exclusive),
+    ).fetchone()[0]
+    aprovado = conn.execute(
+        "SELECT COUNT(DISTINCT run_id) FROM clips WHERE created_at >= ? AND created_at < ? "
+        "AND (approved = 1 OR quality_score >= ?)",
+        (start_date, end_exclusive, min_quality_score),
+    ).fetchone()[0]
+    publicado = conn.execute(
+        "SELECT COUNT(DISTINCT run_id) FROM clips WHERE created_at >= ? AND created_at < ? AND published = 1",
+        (start_date, end_exclusive),
+    ).fetchone()[0]
+    conn.close()
+
+    return [
+        {"stage": "Enfileirado", "count": enfileirado},
+        {"stage": "Processado", "count": processado},
+        {"stage": "Aprovado", "count": aprovado},
+        {"stage": "Publicado", "count": publicado},
+    ]
+
+
+def get_resource_usage_for_range(db_path: Path, start_date: str, end_date: str) -> dict:
+    """Tokens do Gemini e tempo de maquina gastos no intervalo [start_date, end_date]
+    (inclusive, YYYY-MM-DD) - visibilidade de custo/consumo, sem conversao pra $."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    end_exclusive = (datetime.strptime(end_date, "%Y-%m-%d") + timedelta(days=1)).strftime("%Y-%m-%d")
+
+    row = conn.execute(
+        "SELECT COALESCE(SUM(gemini_input_tokens), 0) AS input_tokens, "
+        "COALESCE(SUM(gemini_output_tokens), 0) AS output_tokens, "
+        "COALESCE(SUM((julianday(COALESCE(finished_at, datetime('now'))) - julianday(started_at)) * 86400.0), 0) "
+        "AS machine_seconds "
+        "FROM runs WHERE started_at >= ? AND started_at < ?",
+        (start_date, end_exclusive),
+    ).fetchone()
+    conn.close()
+
+    return {
+        "input_tokens": row["input_tokens"],
+        "output_tokens": row["output_tokens"],
+        "machine_seconds": row["machine_seconds"],
     }
 
 
@@ -427,6 +525,35 @@ def get_clip_analytics_history(db_path: Path, clip_id: int) -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def get_last_analytics_fetch(db_path: Path) -> str | None:
+    """Timestamp da leitura de analytics mais recente (qualquer clipe) - usado pra
+    mostrar 'atualizado ha X' no dashboard, ja que a leitura roda so 1x/dia."""
+    conn = connect(db_path)
+    row = conn.execute("SELECT MAX(fetched_at) FROM clip_analytics").fetchone()
+    conn.close()
+    return row[0]
+
+
+def get_clip_analytics_history_bulk(db_path: Path, clip_ids: list[int]) -> dict[int, list[dict]]:
+    """Historico de analytics de varios clipes numa unica query (evita N+1 quando
+    quem chama precisa da serie temporal de vários clipes, ex.: grafico de coorte)."""
+    if not clip_ids:
+        return {}
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    placeholders = ",".join("?" for _ in clip_ids)
+    rows = conn.execute(
+        f"SELECT * FROM clip_analytics WHERE clip_id IN ({placeholders}) ORDER BY clip_id, fetched_at, id",
+        clip_ids,
+    ).fetchall()
+    conn.close()
+
+    history_by_clip: dict[int, list[dict]] = {clip_id: [] for clip_id in clip_ids}
+    for row in rows:
+        history_by_clip[row["clip_id"]].append(dict(row))
+    return history_by_clip
+
+
 def get_latest_analytics(db_path: Path, clip_id: int) -> dict | None:
     conn = connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -445,7 +572,7 @@ def get_top_performing_titles(db_path: Path, limit: int = 5) -> list[dict]:
     conn.row_factory = sqlite3.Row
     rows = conn.execute(
         """
-        SELECT c.title, a.views
+        SELECT c.id AS clip_id, c.title, c.published_at, a.views
         FROM clips c
         JOIN (
             SELECT clip_id, MAX(id) AS latest_id FROM clip_analytics GROUP BY clip_id
@@ -459,6 +586,69 @@ def get_top_performing_titles(db_path: Path, limit: int = 5) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def get_score_vs_performance(db_path: Path) -> list[dict]:
+    """Score de qualidade (Gemini) x views reais (leitura mais recente) - pra
+    comparar visualmente se a nota realmente prevê performance."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT c.title, c.quality_score, a.views
+        FROM clips c
+        JOIN (
+            SELECT clip_id, MAX(id) AS latest_id FROM clip_analytics GROUP BY clip_id
+        ) latest ON latest.clip_id = c.id
+        JOIN clip_analytics a ON a.id = latest.latest_id
+        WHERE c.quality_score IS NOT NULL AND a.views IS NOT NULL
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_engagement_rates(db_path: Path, limit: int = 10) -> list[dict]:
+    """Taxa de engajamento ((likes + comentarios) / views, leitura mais recente) por
+    clipe - views cru e puxado pelo algoritmo, taxa de engajamento e mais diagnostico
+    de qualidade real do conteudo."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT c.title, a.views, a.likes, a.comments
+        FROM clips c
+        JOIN (
+            SELECT clip_id, MAX(id) AS latest_id FROM clip_analytics GROUP BY clip_id
+        ) latest ON latest.clip_id = c.id
+        JOIN clip_analytics a ON a.id = latest.latest_id
+        WHERE a.views IS NOT NULL AND a.views > 0
+        """
+    ).fetchall()
+    conn.close()
+
+    result = []
+    for row in rows:
+        likes = row["likes"] or 0
+        comments = row["comments"] or 0
+        result.append(
+            {
+                "title": row["title"],
+                "views": row["views"],
+                "likes": likes,
+                "comments": comments,
+                "engagement_rate": (likes + comments) / row["views"],
+            }
+        )
+    result.sort(key=lambda r: r["engagement_rate"], reverse=True)
+    return result[:limit]
+
+
+def build_youtube_feed_url(channel_id: str | None = None, playlist_id: str | None = None) -> str:
+    """Monta a URL do feed RSS do YouTube pra um canal ou playlist - usado tanto
+    pela CLI (`sources add`) quanto pelo dashboard, pra nao duplicar o formato."""
+    param = f"channel_id={channel_id}" if channel_id else f"playlist_id={playlist_id}"
+    return f"https://www.youtube.com/feeds/videos.xml?{param}"
 
 
 def clips_pending_review(db_path: Path, min_quality_score: int) -> list[dict]:
@@ -476,6 +666,32 @@ def clips_pending_review(db_path: Path, min_quality_score: int) -> list[dict]:
     ).fetchall()
     conn.close()
     return [dict(row) for row in rows]
+
+
+def get_next_review_clip(db_path: Path, min_quality_score: int) -> dict | None:
+    """Proximo clipe a revisar (fluxo um-a-um do dashboard) - clipes nunca pulados
+    vem primeiro (mais antigo primeiro); clipes ja pulados voltam pro fim da fila,
+    em rodizio, ordenados por quando foram pulados. Identidade por ID (nao por
+    posicao), entao a fila fica estavel mesmo se um clipe novo chegar no meio."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM clips WHERE published = 0 AND approved = 0 "
+        "AND (quality_score IS NULL OR quality_score < ?) "
+        "ORDER BY (review_skipped_at IS NOT NULL), review_skipped_at, created_at "
+        "LIMIT 1",
+        (min_quality_score,),
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def skip_clip_review(db_path: Path, clip_id: int) -> None:
+    """Manda o clipe pro fim do rodizio de revisao (persistido - sobrevive a reload)."""
+    conn = connect(db_path)
+    conn.execute("UPDATE clips SET review_skipped_at = ? WHERE id = ?", (_now(), clip_id))
+    conn.commit()
+    conn.close()
 
 
 def approve_clip(db_path: Path, clip_id: int) -> bool:
@@ -628,8 +844,10 @@ def mark_queue_error(db_path: Path, item_id: int, message: str, max_retries: int
 def recover_orphans(db_path: Path, max_retries: int) -> int:
     """Itens travados em 'running' sao de uma execucao anterior interrompida no
     meio (processo morto, queda de energia etc.) - com um worker por vez, nao ha
-    ambiguidade. Aplica a mesma politica de retry de `mark_queue_error`. Retorna
-    quantos itens foram recuperados."""
+    ambiguidade. Aplica a mesma politica de retry de `mark_queue_error`. Tambem
+    marca como 'cancelled' qualquer linha de `runs` ainda em 'running' (senao a
+    TUI, que le essa tabela pro painel de Atividade Atual, fica mostrando uma
+    execucao morta pra sempre). Retorna quantos itens da fila foram recuperados."""
     conn = connect(db_path)
     conn.row_factory = sqlite3.Row
     orphans = conn.execute("SELECT id, retry_count FROM queue WHERE status = 'running'").fetchall()
@@ -637,6 +855,7 @@ def recover_orphans(db_path: Path, max_retries: int) -> int:
         _requeue_or_fail(
             conn, row["id"], row["retry_count"], "Interrompido antes de terminar (processo reiniciado)", max_retries
         )
+    conn.execute("UPDATE runs SET status = 'cancelled', finished_at = ? WHERE status = 'running'", (_now(),))
     conn.commit()
     conn.close()
     return len(orphans)

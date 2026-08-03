@@ -144,8 +144,12 @@ def _build_top_performers_section() -> str:
     )
 
 
-def find_highlights(transcript: Transcript) -> HighlightList:
-    """Manda a transcricao com timestamps para o Gemini e pede os melhores trechos pra cortar."""
+def find_highlights(transcript: Transcript) -> tuple[HighlightList, dict]:
+    """Manda a transcricao com timestamps para o Gemini e pede os melhores trechos pra cortar.
+
+    Retorna tambem o uso de tokens da chamada (`{"input_tokens", "output_tokens"}"), pra
+    dar visibilidade de custo/consumo de API no dashboard sem precisar estimar nada.
+    """
     client = genai.Client(api_key=settings.gemini_api_key)
 
     system = SYSTEM_PROMPT.format(
@@ -166,4 +170,9 @@ def find_highlights(transcript: Transcript) -> HighlightList:
     )
 
     data = json.loads(response.text)
-    return HighlightList.model_validate(data)
+    usage = response.usage_metadata
+    token_usage = {
+        "input_tokens": (usage.prompt_token_count or 0) if usage else 0,
+        "output_tokens": (usage.candidates_token_count or 0) if usage else 0,
+    }
+    return HighlightList.model_validate(data), token_usage

@@ -29,6 +29,10 @@ def download_video(
         "quiet": True,
         "no_warnings": True,
         "socket_timeout": 30,
+        # Sempre um video so - sem isso, uma URL com "&list=" (ex.: copiada de
+        # dentro de uma playlist) baixa a playlist inteira antes de falhar,
+        # porque o "video_id" resolvido vira o ID da playlist, nao do video.
+        "noplaylist": True,
         "progress_hooks": [on_progress] if on_progress else [],
         # YouTube exige resolver um desafio anti-throttling (n-challenge) via
         # JS pra liberar a maioria dos formatos - sem isso, so sobra thumbnail.

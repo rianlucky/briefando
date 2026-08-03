@@ -244,12 +244,13 @@ def run_pipeline(
             reporter.message(f"  Gemini falhou (tentativa {attempt}): {exc}. Tentando de novo...")
             logger.warning("Gemini falhou (run %s, tentativa %d): %s", run_id, attempt, exc)
 
-        highlight_list = _retry(
+        highlight_list, gemini_usage = _retry(
             lambda: find_highlights(transcript),
             attempts=settings.pipeline_retry_attempts,
             delay=settings.pipeline_retry_delay_seconds,
             on_retry=_on_highlights_retry,
         )
+        recorder.add_gemini_usage(gemini_usage["input_tokens"], gemini_usage["output_tokens"])
         recorder.end_stage("highlights")
         reporter.message(f"{len(highlight_list.highlights)} highlight(s) encontrado(s).")
         logger.info("%d highlight(s) encontrado(s) (run %s)", len(highlight_list.highlights), run_id)

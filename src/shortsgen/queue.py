@@ -1,4 +1,5 @@
 import logging
+import msvcrt
 from pathlib import Path
 from urllib.parse import parse_qs, urlparse
 
@@ -54,35 +55,73 @@ def add_to_queue_if_new(source: str) -> int | None:
     return enqueue(settings.db_path, source, dedup_key)
 
 
+def _acquire_queue_lock():
+    """Lock exclusivo (nivel de SO, via msvcrt) pra impedir duas `queue run`
+    simultaneas. Preso ao handle do arquivo aberto - se o processo morrer/for
+    morto, o Windows libera sozinho (sem risco de lock "preso" travando tudo
+    pra sempre). None se outro processo ja segura o lock agora."""
+    lock_path = settings.db_path.parent / "queue_run.lock"
+    lock_file = open(lock_path, "a+")
+    try:
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+    except OSError:
+        lock_file.close()
+        return None
+    return lock_file
+
+
+def _release_queue_lock(lock_file) -> None:
+    try:
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        lock_file.close()
+
+
 def run_queue(reporter_factory=None) -> tuple[int, int]:
     """Processa a fila ate esvaziar e entao retorna - nao fica esperando novos
     itens aparecerem. A cadencia de chamar de novo fica por conta de quem
-    agenda (ex.: n8n). Retorna (concluidos, com_erro_terminal)."""
-    from shortsgen.pipeline_runner import ProgressReporter, run_pipeline
+    agenda (ex.: n8n). Retorna (concluidos, com_erro_terminal).
 
-    recovered = recover_orphans(settings.db_path, settings.queue_max_retries)
-    if recovered:
-        logger.info("%d item(ns) da fila recuperados apos interrupcao anterior", recovered)
+    So um worker por vez: se outra `queue run` ja estiver ativa, sai na hora
+    sem mexer em nada (sem isso, duas execucoes simultaneas competem por CPU/GPU
+    E `recover_orphans` da primeira roda acha que o item da OUTRA execucao,
+    ainda em andamento, esta orfao - reenfileira e reprocessa o MESMO video do
+    zero em paralelo, piorando a lentidao em vez de ajudar)."""
+    lock_file = _acquire_queue_lock()
+    if lock_file is None:
+        logger.info("Outra 'queue run' ja esta em andamento - saindo sem processar.")
+        return 0, 0
 
-    done = 0
-    failed = 0
-    while True:
-        item = claim_next_pending(settings.db_path)
-        if item is None:
-            break
+    try:
+        from shortsgen.pipeline_runner import ProgressReporter, run_pipeline
 
-        reporter = reporter_factory() if reporter_factory else ProgressReporter()
-        try:
-            run_pipeline(item["source"], reporter=reporter)
-        except Exception as exc:
-            new_status = mark_queue_error(settings.db_path, item["id"], str(exc), settings.queue_max_retries)
-            if new_status == "error":
-                failed += 1
-        else:
-            mark_queue_done(settings.db_path, item["id"])
-            done += 1
+        recovered = recover_orphans(settings.db_path, settings.queue_max_retries)
+        if recovered:
+            logger.info("%d item(ns) da fila recuperados apos interrupcao anterior", recovered)
 
-    return done, failed
+        done = 0
+        failed = 0
+        while True:
+            item = claim_next_pending(settings.db_path)
+            if item is None:
+                break
+
+            reporter = reporter_factory() if reporter_factory else ProgressReporter()
+            try:
+                run_pipeline(item["source"], reporter=reporter)
+            except Exception as exc:
+                new_status = mark_queue_error(settings.db_path, item["id"], str(exc), settings.queue_max_retries)
+                if new_status == "error":
+                    failed += 1
+            else:
+                mark_queue_done(settings.db_path, item["id"])
+                done += 1
+
+        return done, failed
+    finally:
+        _release_queue_lock(lock_file)
 
 
 def archive_clip(clip_id: int) -> Path:

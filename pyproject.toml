@@ -17,6 +17,9 @@ dependencies = [
     "rich>=13.9",
     "textual>=8.2.8",
     "yt-dlp-ejs>=0.8.0",
+    "streamlit>=1.60",
+    "altair>=6.2",
+    "pandas>=3.0",
 ]
 
 [project.scripts]

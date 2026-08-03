@@ -1,6 +1,6 @@
 # 🚀 Briefando Roadmap
 
->Status: Fase 4 majoritariamente concluída ✅ (IA em revisão com dados reais) — próxima: Fase 5 (Plataforma)
+>Status: Fase 5 (Plataforma) em andamento ✅ (Dashboard Web concluído) — próximo: Multi-canais, Deploy, Publicadores
 
 ---
 
@@ -122,10 +122,10 @@
 
 ## Dashboard
 
-- [ ] Dashboard Web
-- [ ] Histórico
-- [ ] Logs
-- [ ] Estatísticas
+- [x] Dashboard Web (Streamlit, 2026-08-03)
+- [x] Histórico (2026-08-03)
+- [x] Logs (2026-08-03)
+- [x] Estatísticas (2026-08-03)
 
 ## Multi
 

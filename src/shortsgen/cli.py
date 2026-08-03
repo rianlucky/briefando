@@ -9,6 +9,7 @@ from shortsgen.history import (
     DuplicateQueueItem,
     add_source,
     approve_clip,
+    build_youtube_feed_url,
     clips_for_analytics,
     clips_pending_review,
     get_clip_analytics_history,
@@ -126,6 +127,17 @@ def tui() -> None:
         console.print("[cyan]Subindo servidor de arquivos de output/ (janela propria)...[/cyan]")
 
     BriefandoApp().run()
+
+
+@app.command()
+def dashboard() -> None:
+    """Abre o dashboard web (Streamlit): visao geral, clipes com preview de video e fila."""
+    import subprocess
+    import sys
+    from pathlib import Path
+
+    app_path = Path(__file__).parent / "dashboard" / "app.py"
+    subprocess.run([sys.executable, "-m", "streamlit", "run", str(app_path)])
 
 
 @queue_app.command("add")
@@ -339,8 +351,7 @@ def sources_add(
         console.print("[red]Erro:[/red] informe exatamente um entre --channel-id ou --playlist-id.")
         raise typer.Exit(1)
 
-    param = f"channel_id={channel_id}" if channel_id else f"playlist_id={playlist_id}"
-    feed_url = f"https://www.youtube.com/feeds/videos.xml?{param}"
+    feed_url = build_youtube_feed_url(channel_id=channel_id, playlist_id=playlist_id)
     source_id = add_source(settings.db_path, name, feed_url, delay_hours, min_duration)
     console.print(f"[green]Fonte '{name}' adicionada (id={source_id}).[/green] Feed: {feed_url}")
 
