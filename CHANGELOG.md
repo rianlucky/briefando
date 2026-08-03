@@ -7,6 +7,15 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+### Adicionado
+- Descoberta automática de vídeos novos: tabela `sources` guarda canais/playlists do YouTube monitorados via RSS (atraso mínimo e duração mínima configuráveis por fonte). `shortsgen sources add/list/remove` gerencia as fontes. `queue add-if-new` adiciona um vídeo à fila só se nunca tiver sido visto antes (em qualquer status), evitando reprocessar o mesmo vídeo repetidamente conforme o feed RSS é revarrido periodicamente. Fluxo completo no n8n: Schedule Trigger → `sources list` → RSS Feed Read por fonte → filtro de atraso → checagem de duração (YouTube Data API) → `queue add-if-new`.
+
+### Alterado
+- TUI vira um painel de monitoramento puro: removido o disparo manual de vídeo (campo de URL/botões Gerar/Cancelar), já que a descoberta automática + fila cobrem esse caso agora. Novo painel "Atividade atual" mostra em tempo real a etapa, o tempo decorrido e uma barra de progresso estimada (tempo decorrido da etapa / média histórica dessa etapa) de qualquer execução em andamento, lendo direto do banco — funciona pra jobs disparados de qualquer lugar (n8n, `queue run` via CLI), não só pela própria TUI. Novo painel "Execuções recentes" com o histórico das últimas rodadas.
+
+### Performance
+- Comandos leves da CLI (`queue add`, `sources list`, `clips ...`, etc.) não carregam mais as bibliotecas pesadas do pipeline (mediapipe, faster-whisper, google-genai) à toa — só `generate` e `queue run` (que realmente rodam o pipeline) pagam esse custo agora. Reduz de ~4s pra ~1.3s por chamada, importante para automações que chamam a CLI em lote (ex.: descoberta de vídeos processando dezenas de itens em sequência).
+
 ## [0.4.0] - Topázio - 2026-08-02
 
 Fase 4 (Inteligência) do roadmap majoritariamente concluída — IA em revisão com dados reais.

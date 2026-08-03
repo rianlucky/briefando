@@ -58,6 +58,16 @@ CREATE TABLE IF NOT EXISTS clip_analytics (
     average_view_duration_seconds REAL,
     average_view_percentage REAL
 );
+
+CREATE TABLE IF NOT EXISTS sources (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    feed_url TEXT NOT NULL UNIQUE,
+    delay_hours INTEGER NOT NULL DEFAULT 24,
+    min_duration_seconds INTEGER NOT NULL DEFAULT 180,
+    active INTEGER NOT NULL DEFAULT 1,
+    created_at TEXT NOT NULL
+);
 """
 
 
@@ -177,6 +187,46 @@ class RunRecorder:
         return cursor.lastrowid
 
 
+def get_current_activity(db_path: Path) -> dict | None:
+    """Run 'running' agora (se houver) e a etapa ativa dele - le direto do
+    banco, entao funciona pra qualquer processo que estiver rodando o
+    pipeline (TUI, `queue run` via CLI ou disparado pelo n8n), nao so jobs
+    iniciados pela propria TUI."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    run = conn.execute(
+        "SELECT run_id, source, started_at FROM runs WHERE status = 'running' ORDER BY started_at DESC LIMIT 1"
+    ).fetchone()
+    if run is None:
+        conn.close()
+        return None
+    stage = conn.execute(
+        "SELECT stage, started_at FROM run_stages WHERE run_id = ? AND finished_at IS NULL "
+        "ORDER BY started_at DESC LIMIT 1",
+        (run["run_id"],),
+    ).fetchone()
+    conn.close()
+    return {
+        "run_id": run["run_id"],
+        "source": run["source"],
+        "started_at": run["started_at"],
+        "stage": stage["stage"] if stage else None,
+        "stage_started_at": stage["started_at"] if stage else None,
+    }
+
+
+def get_recent_runs(db_path: Path, limit: int = 8) -> list[dict]:
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT run_id, source, status, started_at, finished_at, clips_generated, error_message "
+        "FROM runs ORDER BY started_at DESC LIMIT ?",
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 def get_daily_stats(db_path: Path) -> dict:
     """Shorts gerados hoje, execucoes com erro hoje e tempo medio por etapa.
 
@@ -227,6 +277,17 @@ def enqueue(db_path: Path, source: str, dedup_key: str) -> int:
         raise DuplicateQueueItem(f"'{source}' ja esta na fila (pendente ou rodando)") from exc
     finally:
         conn.close()
+
+
+def has_ever_been_queued(db_path: Path, dedup_key: str) -> bool:
+    """True se ja existe QUALQUER linha (independente do status) com essa
+    dedup_key - diferente do indice unico da fila, que so olha pendente/rodando.
+    Usado pela descoberta automatica (RSS) pra nao reenfileirar o que ja foi
+    processado antes, mesmo que o feed continue trazendo o mesmo vídeo antigo."""
+    conn = connect(db_path)
+    row = conn.execute("SELECT 1 FROM queue WHERE dedup_key = ? LIMIT 1", (dedup_key,)).fetchone()
+    conn.close()
+    return row is not None
 
 
 def list_queue(db_path: Path, statuses: tuple[str, ...] | None = None) -> list[dict]:
@@ -626,3 +687,36 @@ def get_transcription_factor(db_path: Path) -> float:
 
     ratios = [row["transcricao_seconds"] / row["video_seconds"] for row in rows]
     return sum(ratios) / len(ratios)
+
+
+def add_source(db_path: Path, name: str, feed_url: str, delay_hours: int, min_duration_seconds: int) -> int:
+    conn = connect(db_path)
+    cursor = conn.execute(
+        "INSERT INTO sources (name, feed_url, delay_hours, min_duration_seconds, active, created_at) "
+        "VALUES (?, ?, ?, ?, 1, ?)",
+        (name, feed_url, delay_hours, min_duration_seconds, _now()),
+    )
+    conn.commit()
+    conn.close()
+    return cursor.lastrowid
+
+
+def list_sources(db_path: Path, active_only: bool = True) -> list[dict]:
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    query = "SELECT * FROM sources"
+    if active_only:
+        query += " WHERE active = 1"
+    query += " ORDER BY id"
+    rows = conn.execute(query).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def remove_source(db_path: Path, source_id: int) -> bool:
+    conn = connect(db_path)
+    cursor = conn.execute("DELETE FROM sources WHERE id = ?", (source_id,))
+    conn.commit()
+    removed = cursor.rowcount > 0
+    conn.close()
+    return removed

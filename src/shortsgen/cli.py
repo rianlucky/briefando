@@ -7,6 +7,7 @@ from shortsgen.config import settings
 from shortsgen.health import run_checks
 from shortsgen.history import (
     DuplicateQueueItem,
+    add_source,
     approve_clip,
     clips_for_analytics,
     clips_pending_review,
@@ -14,41 +15,54 @@ from shortsgen.history import (
     get_daily_stats,
     list_clips,
     list_queue,
+    list_sources,
     mark_clip_published,
     next_unpublished_clip,
     record_clip_analytics,
+    remove_source,
     retry_queue_item,
     set_clip_youtube_video_id,
 )
 from shortsgen.logging_setup import configure_logging
-from shortsgen.pipeline_runner import STAGE_LABELS, ProgressReporter, run_pipeline
-from shortsgen.queue import add_to_queue, archive_clip, cleanup_published_clips, run_queue
+from shortsgen.queue import add_to_queue, add_to_queue_if_new, archive_clip, cleanup_published_clips
 
 app = typer.Typer(add_completion=False)
 queue_app = typer.Typer(add_completion=False, help="Fila de processamento: evita duplicatas e retoma apos interrupcao.")
 app.add_typer(queue_app, name="queue")
 clips_app = typer.Typer(add_completion=False, help="Clipes gerados e status de publicacao (marcado externamente, ex.: n8n).")
 app.add_typer(clips_app, name="clips")
+sources_app = typer.Typer(add_completion=False, help="Canais/playlists monitorados pra descoberta automatica de videos novos.")
+app.add_typer(sources_app, name="sources")
 console = Console()
 configure_logging(settings.log_dir)
 logger = logging.getLogger(__name__)
 
 
-class RichReporter(ProgressReporter):
-    def __init__(self, console: Console) -> None:
-        self.console = console
+def _make_rich_reporter(console: Console):
+    """Importa `pipeline_runner` (e, por tabela, mediapipe/faster-whisper/etc.)
+    so na hora que um comando que realmente roda o pipeline precisa disso -
+    comandos leves (queue add, sources list, clips ...) nao pagam esse custo
+    de import, o que importa bastante quando chamados em lote (ex.: n8n
+    chamando `queue add-if-new` dezenas de vezes em sequencia)."""
+    from shortsgen.pipeline_runner import STAGE_LABELS, ProgressReporter
 
-    def message(self, text: str) -> None:
-        self.console.print(text)
+    class RichReporter(ProgressReporter):
+        def __init__(self, console: Console) -> None:
+            self.console = console
 
-    def stage_started(self, stage: str) -> None:
-        self.console.print(f"[cyan]{STAGE_LABELS.get(stage, stage)}...[/cyan]")
+        def message(self, text: str) -> None:
+            self.console.print(text)
 
-    def run_finished(self, clips: int, output_dir) -> None:
-        self.console.print(f"\n[bold green]Pronto! {clips} clipe(s) em {output_dir}[/bold green]")
+        def stage_started(self, stage: str) -> None:
+            self.console.print(f"[cyan]{STAGE_LABELS.get(stage, stage)}...[/cyan]")
 
-    def run_failed(self, error: str, run_dir) -> None:
-        self.console.print(f"[red]Erro no processamento.[/red] Arquivos parciais preservados em: {run_dir}")
+        def run_finished(self, clips: int, output_dir) -> None:
+            self.console.print(f"\n[bold green]Pronto! {clips} clipe(s) em {output_dir}[/bold green]")
+
+        def run_failed(self, error: str, run_dir) -> None:
+            self.console.print(f"[red]Erro no processamento.[/red] Arquivos parciais preservados em: {run_dir}")
+
+    return RichReporter(console)
 
 
 @app.command()
@@ -62,7 +76,9 @@ def generate(
         console.print("[red]Erro:[/red] GEMINI_API_KEY nao configurada. Defina-a no arquivo .env antes de rodar.")
         raise typer.Exit(1)
 
-    run_pipeline(source, max_clips=max_clips, keep_temp=keep_temp, reporter=RichReporter(console))
+    from shortsgen.pipeline_runner import run_pipeline
+
+    run_pipeline(source, max_clips=max_clips, keep_temp=keep_temp, reporter=_make_rich_reporter(console))
 
 
 @app.command()
@@ -125,6 +141,20 @@ def queue_add(
     console.print(f"[green]Adicionado a fila (id={item_id}).[/green]")
 
 
+@queue_app.command("add-if-new")
+def queue_add_if_new(
+    source: str = typer.Argument(..., help="URL do YouTube ou caminho de um arquivo de video local"),
+) -> None:
+    """Adiciona a fila so se esse source nunca tiver sido visto antes (em qualquer
+    status) - pensado pra descoberta automatica (RSS), que reescaneia o mesmo
+    feed repetidamente e nao deve reenfileirar o que ja foi processado."""
+    item_id = add_to_queue_if_new(source)
+    if item_id is None:
+        console.print(f"[dim]'{source}' ja foi visto antes, ignorado.[/dim]")
+    else:
+        console.print(f"[green]Adicionado a fila (id={item_id}).[/green]")
+
+
 @queue_app.command("list")
 def queue_list() -> None:
     """Lista os itens da fila (pendentes, rodando, concluidos e com erro)."""
@@ -143,7 +173,9 @@ def queue_run() -> None:
         console.print("[red]Erro:[/red] GEMINI_API_KEY nao configurada. Defina-a no arquivo .env antes de rodar.")
         raise typer.Exit(1)
 
-    done, failed = run_queue(reporter_factory=lambda: RichReporter(console))
+    from shortsgen.queue import run_queue
+
+    done, failed = run_queue(reporter_factory=lambda: _make_rich_reporter(console))
     console.print(f"\n[bold]Fila processada:[/bold] {done} concluido(s), {failed} com erro.")
 
 
@@ -292,6 +324,43 @@ def clips_cleanup() -> None:
     """Apaga do disco os clipes publicados ha mais de CLIP_RETENTION_DAYS dias (padrao 10)."""
     deleted, missing = cleanup_published_clips()
     console.print(f"[green]{deleted} clipe(s) apagado(s).[/green] {missing} ja nao estavam no disco.")
+
+
+@sources_app.command("add")
+def sources_add(
+    name: str = typer.Argument(..., help="Nome pra identificar essa fonte (ex.: 'PrimoCast')"),
+    channel_id: str = typer.Option(None, "--channel-id", help="ID do canal do YouTube (UC...)"),
+    playlist_id: str = typer.Option(None, "--playlist-id", help="ID da playlist do YouTube (PL...)"),
+    delay_hours: int = typer.Option(24, "--delay-hours", help="So considerar videos publicados ha pelo menos X horas"),
+    min_duration: int = typer.Option(180, "--min-duration", help="Duracao minima do video em segundos pra entrar na fila"),
+) -> None:
+    """Adiciona um canal ou playlist do YouTube pra monitoramento automatico de videos novos."""
+    if bool(channel_id) == bool(playlist_id):
+        console.print("[red]Erro:[/red] informe exatamente um entre --channel-id ou --playlist-id.")
+        raise typer.Exit(1)
+
+    param = f"channel_id={channel_id}" if channel_id else f"playlist_id={playlist_id}"
+    feed_url = f"https://www.youtube.com/feeds/videos.xml?{param}"
+    source_id = add_source(settings.db_path, name, feed_url, delay_hours, min_duration)
+    console.print(f"[green]Fonte '{name}' adicionada (id={source_id}).[/green] Feed: {feed_url}")
+
+
+@sources_app.command("list")
+def sources_list_cmd(
+    all_sources: bool = typer.Option(False, "--all", help="Mostra tambem as fontes inativas"),
+) -> None:
+    """Imprime em JSON as fontes monitoradas - usado pela automacao externa (n8n) pra descobrir videos novos."""
+    items = list_sources(settings.db_path, active_only=not all_sources)
+    console.print_json(data=items)
+
+
+@sources_app.command("remove")
+def sources_remove(source_id: int = typer.Argument(..., help="ID da fonte (ver 'sources list --all')")) -> None:
+    """Remove uma fonte monitorada."""
+    if remove_source(settings.db_path, source_id):
+        console.print(f"[green]Fonte {source_id} removida.[/green]")
+    else:
+        console.print(f"[yellow]Fonte {source_id} nao encontrada.[/yellow]")
 
 
 def main() -> None:

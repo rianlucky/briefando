@@ -1,28 +1,21 @@
 import logging
-import threading
 from datetime import datetime
-from pathlib import Path
 
-from textual import work
 from textual.app import App, ComposeResult
 from textual.containers import Horizontal, Vertical
-from textual.widgets import Button, Footer, Header, Input, ProgressBar, RichLog, Static
+from textual.widgets import Footer, Header, ProgressBar, Static
 
 from shortsgen.config import settings
 from shortsgen.health import run_checks
 from shortsgen.history import (
-    DuplicateQueueItem,
-    claim_item,
     get_clips_counts,
+    get_current_activity,
     get_daily_stats,
     get_queue_counts,
-    mark_queue_done,
-    mark_queue_error,
-    reset_queue_item_to_pending,
+    get_recent_runs,
 )
 from shortsgen.logging_setup import configure_logging
-from shortsgen.pipeline_runner import STAGE_LABELS, ProgressReporter, run_pipeline
-from shortsgen.queue import add_to_queue
+from shortsgen.pipeline_runner import STAGE_LABELS
 
 configure_logging(settings.log_dir)
 logger = logging.getLogger(__name__)
@@ -30,23 +23,10 @@ logger = logging.getLogger(__name__)
 STATUS_REFRESH_SECONDS = 5
 STATS_REFRESH_SECONDS = 5
 QUEUE_REFRESH_SECONDS = 5
+ACTIVITY_REFRESH_SECONDS = 3
 
 CSS = """
-#input-row {
-    height: 3;
-    padding: 0 1;
-}
-
-#source-input {
-    width: 1fr;
-}
-
-#run-button, #cancel-button {
-    width: auto;
-    margin-left: 1;
-}
-
-#stage-label {
+#activity-label {
     height: 1;
     padding: 0 1;
     color: $text-muted;
@@ -68,79 +48,39 @@ CSS = """
     text-style: bold;
 }
 
-#run-log {
+#recent-runs {
     height: 1fr;
     border: round $primary;
     margin: 0 1;
+    padding: 0 1;
 }
 """
 
 
-class TuiReporter(ProgressReporter):
-    """Repassa eventos do pipeline pro app Textual, sempre via `call_from_thread`
-    (o pipeline roda numa worker thread; widgets so podem ser tocados dali).
+def _elapsed_seconds(iso_ts: str) -> int:
+    started = datetime.fromisoformat(iso_ts)
+    return max(0, int((datetime.now() - started).total_seconds()))
 
-    Reportar pro painel e "melhor esforco": se o app ja foi fechado/desmontado
-    (ex: usuario saiu do TUI com o run ainda rodando em background), a chamada
-    pro widget falha - isso nunca pode virar o erro registrado no historico do
-    pipeline, entao qualquer excecao aqui e so logada e ignorada.
-    """
 
-    def __init__(self, app: "BriefandoApp") -> None:
-        self._app = app
-
-    def _safe_call(self, callback, *args) -> None:
-        try:
-            self._app.call_from_thread(callback, *args)
-        except Exception:
-            logger.warning("Falha ao atualizar o painel (provavelmente ja fechado)", exc_info=True)
-
-    def message(self, text: str) -> None:
-        self._safe_call(self._app.append_log, text)
-
-    def stage_started(self, stage: str) -> None:
-        self._safe_call(self._app.set_stage, stage)
-
-    def download_progress(self, percent: float) -> None:
-        self._safe_call(self._app.set_percent_progress, percent)
-
-    def transcription_progress(self, percent: float) -> None:
-        self._safe_call(self._app.set_percent_progress, percent)
-
-    def clip_progress(self, done: int, total: int) -> None:
-        self._safe_call(self._app.set_clip_progress, done, total)
-
-    def run_finished(self, clips: int, output_dir: Path) -> None:
-        self._safe_call(self._app.handle_run_finished, clips, output_dir)
-
-    def run_failed(self, error: str, run_dir: Path) -> None:
-        self._safe_call(self._app.handle_run_failed, error, run_dir)
-
-    def run_cancelled(self, run_dir: Path) -> None:
-        self._safe_call(self._app.handle_run_cancelled, run_dir)
+def _format_elapsed(seconds: int) -> str:
+    minutes, secs = divmod(seconds, 60)
+    return f"{minutes}m{secs:02d}s"
 
 
 class BriefandoApp(App):
-    """Painel interativo: status dos servicos, estatisticas do dia e execucao com progresso ao vivo."""
+    """Painel de monitoramento: status dos servicos, estatisticas, fila,
+    publicacao e atividade atual do pipeline - tudo alimentado pela fila
+    (`shortsgen queue run`, disparado externamente, ex.: n8n). Nao dispara
+    execucoes por aqui - so observa o que ja esta rodando via banco de dados."""
 
     TITLE = "Briefando"
     CSS = CSS
     BINDINGS = [("q", "quit", "Sair")]
 
-    def __init__(self) -> None:
-        super().__init__()
-        self._job_running = False
-        self._cancel_event: threading.Event | None = None
-        self._current_queue_item_id: int | None = None
-
     def compose(self) -> ComposeResult:
         yield Header()
-        with Horizontal(id="input-row"):
-            yield Input(placeholder="URL do YouTube ou caminho de video local...", id="source-input")
-            yield Button("Gerar", id="run-button", variant="primary")
-            yield Button("Cancelar", id="cancel-button", variant="error", disabled=True)
-        yield Static("Nenhuma execucao em andamento", id="stage-label")
-        yield ProgressBar(id="clip-progress", show_eta=False)
+        yield Static("Nenhuma execucao em andamento", id="activity-label")
+        yield ProgressBar(id="activity-progress", show_eta=False)
         with Horizontal(id="panels-row"):
             with Vertical(classes="panel"):
                 yield Static("Status dos servicos", classes="panel-title")
@@ -155,16 +95,19 @@ class BriefandoApp(App):
             with Vertical(classes="panel"):
                 yield Static("Publicacao", classes="panel-title")
                 yield Static(id="clips-content")
-        yield RichLog(id="run-log", wrap=True, markup=True)
+        yield Static("Execucoes recentes", classes="panel-title")
+        yield Static(id="recent-runs")
         yield Footer()
 
     def on_mount(self) -> None:
         self.refresh_status()
         self.refresh_stats()
         self.refresh_queue()
+        self.refresh_activity()
         self.set_interval(STATUS_REFRESH_SECONDS, self.refresh_status)
         self.set_interval(STATS_REFRESH_SECONDS, self.refresh_stats)
         self.set_interval(QUEUE_REFRESH_SECONDS, self.refresh_queue)
+        self.set_interval(ACTIVITY_REFRESH_SECONDS, self.refresh_activity)
 
     def refresh_status(self) -> None:
         lines = []
@@ -205,107 +148,37 @@ class BriefandoApp(App):
         ]
         self.query_one("#clips-content", Static).update("\n".join(clips_lines))
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "run-button":
-            self._start_job()
-        elif event.button.id == "cancel-button":
-            self._cancel_job()
+        runs = get_recent_runs(settings.db_path)
+        run_lines = []
+        for run in runs:
+            icon = {"success": "[green]OK[/green]", "error": "[red]ERRO[/red]", "running": "[cyan]RODANDO[/cyan]", "cancelled": "[yellow]CANCELADO[/yellow]"}.get(
+                run["status"], run["status"]
+            )
+            run_lines.append(f"{icon}  {run['started_at']}  {run['source']}")
+        self.query_one("#recent-runs", Static).update("\n".join(run_lines) if run_lines else "Nenhuma execucao ainda.")
 
-    def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "source-input":
-            self._start_job()
+    def refresh_activity(self) -> None:
+        activity = get_current_activity(settings.db_path)
+        progress_bar = self.query_one("#activity-progress", ProgressBar)
 
-    def _start_job(self) -> None:
-        if self._job_running:
-            self.append_log("[yellow]Ja existe uma execucao em andamento.[/yellow]")
+        if activity is None:
+            self.query_one("#activity-label", Static).update("Nenhuma execucao em andamento")
+            progress_bar.update(total=100, progress=0)
             return
 
-        if not settings.gemini_api_key:
-            self.append_log("[red]GEMINI_API_KEY nao configurada. Defina-a no .env antes de rodar.[/red]")
-            return
-
-        source = self.query_one("#source-input", Input).value.strip()
-        if not source:
-            return
-
-        try:
-            item_id = add_to_queue(source)
-        except DuplicateQueueItem as exc:
-            self.append_log(f"[yellow]{exc}[/yellow]")
-            return
-        claim_item(settings.db_path, item_id)
-        self._current_queue_item_id = item_id
-        self.refresh_queue()
-
-        self._job_running = True
-        self._cancel_event = threading.Event()
-        self.query_one("#run-button", Button).disabled = True
-        self.query_one("#cancel-button", Button).disabled = False
-        self.query_one("#clip-progress", ProgressBar).update(total=100, progress=0)
-        self.append_log(f"[bold]Iniciando:[/bold] {source}")
-        self._run_job(source, self._cancel_event)
-
-    def _cancel_job(self) -> None:
-        if not self._job_running or self._cancel_event is None:
-            return
-        self._cancel_event.set()
-        self.query_one("#cancel-button", Button).disabled = True
-        self.append_log(
-            "[yellow]Cancelamento solicitado - para no proximo ponto seguro "
-            "(se estiver transcrevendo, so para quando a transcricao atual terminar).[/yellow]"
+        stage_label = STAGE_LABELS.get(activity["stage"], activity["stage"]) if activity["stage"] else "iniciando"
+        stage_reference = activity["stage_started_at"] or activity["started_at"]
+        elapsed_seconds = _elapsed_seconds(stage_reference)
+        self.query_one("#activity-label", Static).update(
+            f"Rodando ha {_format_elapsed(elapsed_seconds)}: {stage_label} - {activity['source']}"
         )
 
-    @work(thread=True)
-    def _run_job(self, source: str, cancel_event: threading.Event) -> None:
-        try:
-            run_pipeline(source, reporter=TuiReporter(self), cancel_event=cancel_event)
-        except Exception:
-            logger.exception("Run disparado pelo TUI falhou")
-
-    def append_log(self, text: str) -> None:
-        timestamp = datetime.now().strftime("%d/%m/%Y %H:%M:%S")
-        self.query_one("#run-log", RichLog).write(f"[dim]{timestamp}[/dim] {text}")
-
-    def set_stage(self, stage: str) -> None:
-        self.query_one("#stage-label", Static).update(f"Etapa atual: {STAGE_LABELS.get(stage, stage)}")
-
-    def set_percent_progress(self, percent: float) -> None:
-        self.query_one("#clip-progress", ProgressBar).update(total=100, progress=percent)
-
-    def set_clip_progress(self, done: int, total: int) -> None:
-        self.query_one("#clip-progress", ProgressBar).update(total=max(total, 1), progress=done)
-
-    def _reset_job_state(self) -> None:
-        self._job_running = False
-        self._cancel_event = None
-        self._current_queue_item_id = None
-        self.query_one("#run-button", Button).disabled = False
-        self.query_one("#cancel-button", Button).disabled = True
-        self.query_one("#stage-label", Static).update("Nenhuma execucao em andamento")
-
-    def handle_run_finished(self, clips: int, output_dir: Path) -> None:
-        self.append_log(f"[bold green]Pronto! {clips} clipe(s) em {output_dir}[/bold green]")
-        if self._current_queue_item_id is not None:
-            mark_queue_done(settings.db_path, self._current_queue_item_id)
-        self._reset_job_state()
-        self.refresh_stats()
-        self.refresh_queue()
-
-    def handle_run_failed(self, error: str, run_dir: Path) -> None:
-        self.append_log(f"[red]Erro: {error}[/red] (arquivos preservados em {run_dir})")
-        if self._current_queue_item_id is not None:
-            mark_queue_error(settings.db_path, self._current_queue_item_id, error, settings.queue_max_retries)
-        self._reset_job_state()
-        self.refresh_stats()
-        self.refresh_queue()
-
-    def handle_run_cancelled(self, run_dir: Path) -> None:
-        self.append_log(f"[yellow]Execucao cancelada.[/yellow] Arquivos parciais em {run_dir}")
-        if self._current_queue_item_id is not None:
-            reset_queue_item_to_pending(settings.db_path, self._current_queue_item_id)
-        self._reset_job_state()
-        self.refresh_stats()
-        self.refresh_queue()
+        # Estimativa (nao exata): elapsed da etapa atual / media historica dessa
+        # mesma etapa - mesma logica que o pipeline ja usa pra estimar a
+        # transcricao, so que aqui olhando o banco em vez de callback em memoria.
+        stage_avg = get_daily_stats(settings.db_path)["stage_avgs"].get(activity["stage"])
+        percent = min(99.0, elapsed_seconds / stage_avg * 100) if stage_avg else 0.0
+        progress_bar.update(total=100, progress=percent)
 
 
 def main() -> None:

@@ -8,13 +8,13 @@ from shortsgen.history import (
     clips_ready_for_cleanup,
     enqueue,
     get_clip,
+    has_ever_been_queued,
     mark_clip_deleted,
     mark_queue_done,
     mark_queue_error,
     recover_orphans,
     set_clip_path,
 )
-from shortsgen.pipeline_runner import ProgressReporter, run_pipeline
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +43,23 @@ def add_to_queue(source: str) -> int:
     return enqueue(settings.db_path, source, compute_dedup_key(source))
 
 
+def add_to_queue_if_new(source: str) -> int | None:
+    """Como `add_to_queue`, mas ignora silenciosamente (retorna None) se esse
+    source ja foi visto antes em qualquer status - inclusive 'done'/'error'.
+    Pensado pra descoberta automatica (RSS), que reescaneia o mesmo feed
+    repetidamente e nao deve reenfileirar o que ja foi processado."""
+    dedup_key = compute_dedup_key(source)
+    if has_ever_been_queued(settings.db_path, dedup_key):
+        return None
+    return enqueue(settings.db_path, source, dedup_key)
+
+
 def run_queue(reporter_factory=None) -> tuple[int, int]:
     """Processa a fila ate esvaziar e entao retorna - nao fica esperando novos
     itens aparecerem. A cadencia de chamar de novo fica por conta de quem
     agenda (ex.: n8n). Retorna (concluidos, com_erro_terminal)."""
+    from shortsgen.pipeline_runner import ProgressReporter, run_pipeline
+
     recovered = recover_orphans(settings.db_path, settings.queue_max_retries)
     if recovered:
         logger.info("%d item(ns) da fila recuperados apos interrupcao anterior", recovered)
