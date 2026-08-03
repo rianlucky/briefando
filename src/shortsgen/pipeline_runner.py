@@ -275,11 +275,11 @@ def run_pipeline(
             cut_segment(video_path, highlight.start, highlight.end, clip_raw, cancel_event=cancel_event)
 
             reporter.message("  Reenquadrando para 9:16 (seguindo o rosto)...")
-            reframe_to_vertical(clip_raw, clip_vertical, cancel_event=cancel_event)
+            mode_track = reframe_to_vertical(clip_raw, clip_vertical, cancel_event=cancel_event)
 
             reporter.message("  Gerando legendas...")
             words = transcript.words_between(highlight.start, highlight.end)
-            build_ass_captions(words, highlight.start, clip_ass)
+            build_ass_captions(words, highlight.start, clip_ass, mode_track=mode_track)
 
             slug = _slugify(highlight.title)
             output_path = settings.output_dir / f"{idx:02d}-{slug}.mp4"
@@ -292,6 +292,7 @@ def run_pipeline(
                 highlight.tags,
                 highlight.hashtags,
                 YOUTUBE_CATEGORIES.get(highlight.category, DEFAULT_CATEGORY_ID),
+                highlight.quality_score,
             )
         recorder.end_stage("render")
         reporter.clip_progress(total, total)

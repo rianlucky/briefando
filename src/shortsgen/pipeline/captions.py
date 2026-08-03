@@ -2,9 +2,15 @@ from pathlib import Path
 
 from shortsgen.models import Word
 
-# MarginV subiu de 160 para 256 (+5% da altura de 1920px) para nao ficar coberto
-# pelos botoes/legendas nativas do TikTok/Reels/Shorts. WrapStyle 0 (em vez de 2)
-# quebra a linha automaticamente em vez de cortar o texto que passa da largura.
+# MarginV subiu de 160 para 256 (+5% da altura de 1920px) e depois pra 448
+# (+10% adicional) para nao ficar coberto pelos botoes/descricao nativos do
+# TikTok/Reels/Shorts. WrapStyle 0 (em vez de 2) quebra a linha automaticamente
+# em vez de cortar o texto que passa da largura.
+#
+# Dois estilos porque a posicao da legenda depende do enquadramento do
+# instante (ver reframe.py): "Bottom" pro foco em 1 pessoa, "Middle" pro
+# split-screen (Alignment 5 centraliza verticalmente em PlayResY=1920, ou
+# seja, cai exatamente na linha de divisao entre as duas metades).
 ASS_HEADER = """[Script Info]
 ScriptType: v4.00+
 PlayResX: 1080
@@ -14,7 +20,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Default,Arial Black,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,2,60,60,256,1
+Style: Bottom,Arial Black,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,2,60,60,448,1
+Style: Middle,Arial Black,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,5,60,60,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Text
@@ -23,6 +30,7 @@ Format: Layer, Start, End, Style, Text
 # Cores no formato ASS sao BGR (nao RGB). Branco = cor padrao do Style.
 _HIGHLIGHT_COLOR = r"&H00FFFF&"  # amarelo
 _DEFAULT_COLOR = r"&HFFFFFF&"  # branco
+_HIGHLIGHT_SCALE = 130  # % - a palavra ativa cresce (efeito "pop"), mais dinamico
 
 
 def _format_ass_time(seconds: float) -> str:
@@ -56,14 +64,32 @@ def _render_chunk_text(chunk: list[Word], active_index: int) -> str:
     for i, w in enumerate(chunk):
         token = w.text.strip().upper()
         if i == active_index:
-            token = f"{{\\c{_HIGHLIGHT_COLOR}}}{token}{{\\c{_DEFAULT_COLOR}}}"
+            token = (
+                f"{{\\c{_HIGHLIGHT_COLOR}\\fscx{_HIGHLIGHT_SCALE}\\fscy{_HIGHLIGHT_SCALE}}}"
+                f"{token}{{\\c{_DEFAULT_COLOR}\\fscx100\\fscy100}}"
+            )
         tokens.append(token)
     return " ".join(tokens)
 
 
-def _chunk_events(chunk: list[Word]) -> list[str]:
-    """Um evento por palavra do chunk, pintando a palavra ativa de amarelo
-    (efeito karaoke) enquanto o resto do texto do trecho fica visivel em branco."""
+def _mode_at(mode_track: list[tuple[float, int]] | None, t: float) -> int:
+    """1 = foco em 1 pessoa, 2 = split-screen. Sem mode_track, assume 1 (mesmo
+    comportamento de antes dessa mudanca)."""
+    if not mode_track:
+        return 1
+    mode = mode_track[0][1]
+    for ts, m in mode_track:
+        if ts > t:
+            break
+        mode = m
+    return mode
+
+
+def _chunk_events(chunk: list[Word], mode_track: list[tuple[float, int]] | None) -> list[str]:
+    """Um evento por palavra do chunk, pintando a palavra ativa de amarelo e
+    maior (efeito karaoke) enquanto o resto do texto do trecho fica visivel em
+    branco. O estilo (posicao vertical) segue o enquadramento naquele instante:
+    "Middle" (linha de divisao) durante split-screen, "Bottom" caso contrario."""
     events = []
     for i, w in enumerate(chunk):
         start = w.start
@@ -73,15 +99,24 @@ def _chunk_events(chunk: list[Word]) -> list[str]:
         text = _render_chunk_text(chunk, i)
         if not text.strip():
             continue
-        events.append(f"Dialogue: 0,{_format_ass_time(start)},{_format_ass_time(end)},Default,{text}")
+        style = "Middle" if _mode_at(mode_track, start) == 2 else "Bottom"
+        events.append(f"Dialogue: 0,{_format_ass_time(start)},{_format_ass_time(end)},{style},{text}")
     return events
 
 
-def build_ass_captions(words: list[Word], clip_start: float, dst_path: Path) -> None:
+def build_ass_captions(
+    words: list[Word],
+    clip_start: float,
+    dst_path: Path,
+    mode_track: list[tuple[float, int]] | None = None,
+) -> None:
     """Gera um arquivo .ass com legendas agrupadas, com tempos relativos ao inicio do clipe.
 
     Cada trecho de palavras aparece inteiro na tela, e a palavra sendo falada
-    naquele instante fica destacada em amarelo (estilo karaoke)."""
+    naquele instante fica destacada em amarelo e maior (estilo karaoke). A
+    posicao vertical acompanha o `mode_track` de `reframe_to_vertical` (mesma
+    janela de tempo do clipe): linha de divisao no split-screen, mais alta no
+    foco em 1 pessoa."""
     shifted = [
         Word(start=w.start - clip_start, end=w.end - clip_start, text=w.text) for w in words
     ]
@@ -92,6 +127,6 @@ def build_ass_captions(words: list[Word], clip_start: float, dst_path: Path) -> 
         clean_chunk = [w for w in chunk if w.text.strip()]
         if not clean_chunk:
             continue
-        lines.extend(_chunk_events(clean_chunk))
+        lines.extend(_chunk_events(clean_chunk, mode_track))
 
     dst_path.write_text("\n".join(lines), encoding="utf-8")

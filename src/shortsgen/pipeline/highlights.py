@@ -4,6 +4,7 @@ from google import genai
 from google.genai import types
 
 from shortsgen.config import settings
+from shortsgen.history import get_top_performing_titles
 from shortsgen.models import HighlightList, Transcript
 from shortsgen.pipeline.text_clean import clean_for_prompt
 
@@ -39,6 +40,7 @@ Alem do corte, gere tambem os metadados de publicacao de cada clipe:
 - tags: 5-8 palavras-chave de busca relacionadas ao conteudo, sem o caractere #
 - hashtags: 2-4 hashtags relevantes, sem o caractere #, sempre incluindo "shorts"
 - category: a categoria do YouTube mais adequada, escolhida entre as opcoes fornecidas
+- quality_score: nota de 0 a 100 do potencial viral desse clipe especifico como Short standalone. Considere: forca do gancho nos primeiros 3 segundos, se faz sentido sozinho sem contexto, presenca de uma virada/piada/dado surpreendente/emocao clara, e ritmo (sem trechos mortos). Seja criterioso e use a faixa toda -- nem todo highlight enviado merece nota alta.
 
 A transcricao abaixo teve vicios de linguagem e repeticoes removidos para ficar mais enxuta -- isso e so limpeza de texto, ignore pequenas quebras no fraseado.
 
@@ -87,6 +89,10 @@ HIGHLIGHT_SCHEMA = {
                         "enum": list(YOUTUBE_CATEGORIES.keys()),
                         "description": "categoria do YouTube mais adequada pra esse clipe",
                     },
+                    "quality_score": {
+                        "type": "integer",
+                        "description": "nota de 0 a 100 do potencial viral desse clipe como Short standalone",
+                    },
                 },
                 "required": [
                     "start",
@@ -97,6 +103,7 @@ HIGHLIGHT_SCHEMA = {
                     "tags",
                     "hashtags",
                     "category",
+                    "quality_score",
                 ],
                 "additionalProperties": False,
             },
@@ -120,6 +127,23 @@ def _build_prompt_transcript(transcript: Transcript) -> str:
     return "\n".join(lines)
 
 
+def _build_top_performers_section() -> str:
+    """Referencia de titulos que ja performaram bem no canal, pra puxar o
+    estilo/gancho do Gemini na direcao do que ja funcionou de verdade. So
+    entra no prompt com historico suficiente (`MIN_HISTORY_FOR_LEARNING`)
+    pra nao induzir a partir de 1-2 amostras sem significado estatistico."""
+    top = get_top_performing_titles(settings.db_path, limit=5)
+    if len(top) < settings.min_history_for_learning:
+        return ""
+
+    lines = "\n".join(f'- "{t["title"]}" ({t["views"]} views)' for t in top)
+    return (
+        "\n\nTitulos que ja tiveram bom desempenho neste canal (referencia de "
+        "estilo/gancho - nao copie literalmente, adapte o que funciona pro "
+        "conteudo atual):\n" + lines
+    )
+
+
 def find_highlights(transcript: Transcript) -> HighlightList:
     """Manda a transcricao com timestamps para o Gemini e pede os melhores trechos pra cortar."""
     client = genai.Client(api_key=settings.gemini_api_key)
@@ -128,7 +152,7 @@ def find_highlights(transcript: Transcript) -> HighlightList:
         min_s=settings.clip_min_seconds,
         max_s=settings.clip_max_seconds,
         max_clips=settings.max_clips,
-    )
+    ) + _build_top_performers_section()
 
     response = client.models.generate_content(
         model=settings.gemini_model,

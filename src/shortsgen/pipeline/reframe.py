@@ -213,10 +213,14 @@ def reframe_to_vertical(
     target_w: int = 1080,
     target_h: int = 1920,
     cancel_event=None,
-) -> None:
+) -> list[tuple[float, int]]:
     """Recorta o video horizontal em 9:16. Segue o rosto de quem fala quando ha
     1 pessoa em cena; quando ha 2 pessoas estaveis, alterna pra split-screen
-    (uma em cima, outra embaixo). Saida sem audio."""
+    (uma em cima, outra embaixo). Saida sem audio.
+
+    Retorna o `mode_track` (instante -> 1 pessoa/2 split-screen) pra quem gerar
+    a legenda saber, em cada instante do clipe, onde posicionar o texto (linha
+    de divisao no split-screen, mais alto no foco em 1 pessoa)."""
     samples, src_w, src_h = _detect_face_samples(src_path, cancel_event=cancel_event)
     single_track, left_track, right_track, raw_mode = _build_tracks(samples, src_w)
     mode_track = _debounce_mode(raw_mode)
@@ -268,3 +272,5 @@ def reframe_to_vertical(
     finally:
         writer.release()
         cap.release()
+
+    return mode_track

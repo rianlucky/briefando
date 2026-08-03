@@ -197,9 +197,10 @@ class BriefandoApp(App):
         ]
         self.query_one("#queue-content", Static).update("\n".join(queue_lines))
 
-        clips = get_clips_counts(settings.db_path)
+        clips = get_clips_counts(settings.db_path, settings.min_quality_score)
         clips_lines = [
             f"Aguardando publicar: {clips['pending']}",
+            f"Aguardando revisao: {clips['needs_review']}",
             f"Publicados: {clips['published']}",
         ]
         self.query_one("#clips-content", Static).update("\n".join(clips_lines))

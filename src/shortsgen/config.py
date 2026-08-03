@@ -54,6 +54,9 @@ class Settings(BaseSettings):
     pipeline_retry_attempts: int = 3
     pipeline_retry_delay_seconds: float = 5.0
 
+    min_quality_score: int = 60
+    min_history_for_learning: int = 3
+
 
 settings = Settings()
 settings.work_dir = _anchor(settings.work_dir)

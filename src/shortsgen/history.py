@@ -45,6 +45,19 @@ CREATE TABLE IF NOT EXISTS clips (
     published INTEGER NOT NULL DEFAULT 0,
     published_at TEXT
 );
+
+CREATE TABLE IF NOT EXISTS clip_analytics (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    clip_id INTEGER NOT NULL REFERENCES clips(id),
+    fetched_at TEXT NOT NULL,
+    views INTEGER,
+    likes INTEGER,
+    comments INTEGER,
+    impressions INTEGER,
+    ctr REAL,
+    average_view_duration_seconds REAL,
+    average_view_percentage REAL
+);
 """
 
 
@@ -71,6 +84,8 @@ def connect(db_path: Path) -> sqlite3.Connection:
     _ensure_column(conn, "clips", "category_id", "TEXT")
     _ensure_column(conn, "clips", "deleted_at", "TEXT")
     _ensure_column(conn, "clips", "youtube_video_id", "TEXT")
+    _ensure_column(conn, "clips", "quality_score", "INTEGER")
+    _ensure_column(conn, "clips", "approved", "INTEGER NOT NULL DEFAULT 0")
     return conn
 
 
@@ -141,11 +156,22 @@ class RunRecorder:
         tags: list[str],
         hashtags: list[str],
         category_id: str,
+        quality_score: int,
     ) -> int:
         cursor = self._conn.execute(
-            "INSERT INTO clips (run_id, path, title, description, tags, hashtags, category_id, created_at, published) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0)",
-            (self._run_id, path, title, description, json.dumps(tags), json.dumps(hashtags), category_id, _now()),
+            "INSERT INTO clips (run_id, path, title, description, tags, hashtags, category_id, quality_score, created_at, published) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 0)",
+            (
+                self._run_id,
+                path,
+                title,
+                description,
+                json.dumps(tags),
+                json.dumps(hashtags),
+                category_id,
+                quality_score,
+                _now(),
+            ),
         )
         self._conn.commit()
         return cursor.lastrowid
@@ -265,16 +291,158 @@ def mark_clip_deleted(db_path: Path, clip_id: int) -> None:
     conn.close()
 
 
-def next_unpublished_clip(db_path: Path) -> dict | None:
+def set_clip_youtube_video_id(db_path: Path, clip_id: int, youtube_video_id: str) -> bool:
+    """Preenche/corrige o `youtube_video_id` de um clipe ja publicado (o
+    `mark_clip_published` normal so aceita isso na hora de marcar como
+    publicado - isso aqui e pra backfill de clipes publicados antes do
+    `--video-id` existir, ou correcao manual). False se o clipe nao existir."""
+    conn = connect(db_path)
+    cursor = conn.execute(
+        "UPDATE clips SET youtube_video_id = ? WHERE id = ?", (youtube_video_id, clip_id)
+    )
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+
+def clips_for_analytics(db_path: Path) -> list[dict]:
+    """Clipes publicados com `youtube_video_id` conhecido - a lista que a
+    automacao externa (n8n) percorre pra buscar metricas atualizadas na API do
+    YouTube (Data API pra views/likes/comments, Analytics API pra CTR/retencao)."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, youtube_video_id, title FROM clips "
+        "WHERE published = 1 AND youtube_video_id IS NOT NULL"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def record_clip_analytics(
+    db_path: Path,
+    clip_id: int,
+    *,
+    views: int | None = None,
+    likes: int | None = None,
+    comments: int | None = None,
+    impressions: int | None = None,
+    ctr: float | None = None,
+    average_view_duration_seconds: float | None = None,
+    average_view_percentage: float | None = None,
+) -> int:
+    """Registra uma nova leitura de metricas pra um clipe (uma linha por
+    chamada - forma uma serie temporal, nao sobrescreve a anterior)."""
+    conn = connect(db_path)
+    cursor = conn.execute(
+        "INSERT INTO clip_analytics "
+        "(clip_id, fetched_at, views, likes, comments, impressions, ctr, "
+        " average_view_duration_seconds, average_view_percentage) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            clip_id,
+            _now(),
+            views,
+            likes,
+            comments,
+            impressions,
+            ctr,
+            average_view_duration_seconds,
+            average_view_percentage,
+        ),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_clip_analytics_history(db_path: Path, clip_id: int) -> list[dict]:
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT * FROM clip_analytics WHERE clip_id = ? ORDER BY fetched_at, id", (clip_id,)
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_latest_analytics(db_path: Path, clip_id: int) -> dict | None:
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT * FROM clip_analytics WHERE clip_id = ? ORDER BY fetched_at DESC, id DESC LIMIT 1", (clip_id,)
+    ).fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_top_performing_titles(db_path: Path, limit: int = 5) -> list[dict]:
+    """Titulos com mais views (usando a leitura mais recente de cada clipe) -
+    usado como referencia de estilo/gancho no prompt do Gemini, pra aprender
+    com o que ja performou bem no canal."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT c.title, a.views
+        FROM clips c
+        JOIN (
+            SELECT clip_id, MAX(id) AS latest_id FROM clip_analytics GROUP BY clip_id
+        ) latest ON latest.clip_id = c.id
+        JOIN clip_analytics a ON a.id = latest.latest_id
+        WHERE a.views IS NOT NULL
+        ORDER BY a.views DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def clips_pending_review(db_path: Path, min_quality_score: int) -> list[dict]:
+    """Clipes nao publicados que ficaram abaixo do `min_quality_score` (ou nunca
+    foram avaliados - `quality_score IS NULL`, ex.: gerados antes dessa
+    funcionalidade existir) e ainda nao foram aprovados manualmente."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT id, title, quality_score FROM clips "
+        "WHERE published = 0 AND approved = 0 "
+        "AND (quality_score IS NULL OR quality_score < ?) "
+        "ORDER BY quality_score IS NOT NULL, quality_score DESC",
+        (min_quality_score,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def approve_clip(db_path: Path, clip_id: int) -> bool:
+    """Aprova manualmente um clipe que ficou abaixo do quality_score minimo,
+    liberando ele pro fluxo normal de publicacao. False se nao existir."""
+    conn = connect(db_path)
+    cursor = conn.execute("UPDATE clips SET approved = 1 WHERE id = ?", (clip_id,))
+    conn.commit()
+    updated = cursor.rowcount > 0
+    conn.close()
+    return updated
+
+
+def next_unpublished_clip(db_path: Path, min_quality_score: int) -> dict | None:
     """Escolhe aleatoriamente um clipe nao publicado (nao o mais antigo) - evita
-    publicar sempre na mesma ordem/sequencia dos videos processados. Devolve
-    com a descricao final (hashtags ja anexadas) e tags como lista, pronto pra
-    automacao externa (ex.: n8n) usar direto no upload."""
+    publicar sempre na mesma ordem/sequencia dos videos processados. So
+    considera clipes com `quality_score >= min_quality_score` OU ja aprovados
+    manualmente (`approved = 1`) - os demais ficam esperando revisao (ver
+    `clips_pending_review`/`approve_clip`). Devolve com a descricao final
+    (hashtags ja anexadas) e tags como lista, pronto pra automacao externa
+    (ex.: n8n) usar direto no upload."""
     conn = connect(db_path)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
         "SELECT id, path, title, description, tags, hashtags, category_id FROM clips "
-        "WHERE published = 0 ORDER BY RANDOM() LIMIT 1"
+        "WHERE published = 0 AND (quality_score >= ? OR approved = 1) "
+        "ORDER BY RANDOM() LIMIT 1",
+        (min_quality_score,),
     ).fetchone()
     conn.close()
     if row is None:
@@ -314,12 +482,16 @@ def get_queue_counts(db_path: Path) -> dict:
     return counts
 
 
-def get_clips_counts(db_path: Path) -> dict:
+def get_clips_counts(db_path: Path, min_quality_score: int) -> dict:
     conn = connect(db_path)
     published = conn.execute("SELECT COUNT(*) FROM clips WHERE published = 1").fetchone()[0]
     pending = conn.execute("SELECT COUNT(*) FROM clips WHERE published = 0").fetchone()[0]
+    needs_review = conn.execute(
+        "SELECT COUNT(*) FROM clips WHERE published = 0 AND approved = 0 AND quality_score < ?",
+        (min_quality_score,),
+    ).fetchone()[0]
     conn.close()
-    return {"published": published, "pending": pending}
+    return {"published": published, "pending": pending, "needs_review": needs_review}
 
 
 def claim_next_pending(db_path: Path) -> dict | None:

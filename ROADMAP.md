@@ -1,6 +1,6 @@
 # 🚀 Briefando Roadmap
 
->Status: Fase 3 concluída ✅ — próxima: Fase 4 (Inteligência)
+>Status: Fase 4 majoritariamente concluída ✅ (IA em revisão com dados reais) — próxima: Fase 5 (Plataforma)
 
 ---
 
@@ -95,26 +95,26 @@
 
 ---
 
-# 🧠 FASE 4 — Inteligência
+# 🧠 FASE 4 — Inteligência ✅ (majoritariamente concluída 2026-08-02, IA em revisão)
 
 ## Score
 
-- [ ] Quality Score
-- [ ] Score mínimo para publicar
-- [ ] Revisão manual
+- [x] Quality Score
+- [x] Score mínimo para publicar
+- [x] Revisão manual
 
 ## Analytics
 
-- [ ] Histórico de views
-- [ ] Histórico de CTR
-- [ ] Histórico de retenção
-- [ ] Banco de títulos
+- [x] Histórico de views
+- [ ] Histórico de CTR (bloqueado: métrica de impressões/CTR de Shorts não é exposta pela API pública do YouTube, só aparece no YouTube Studio manualmente — sem solução automatizada disponível, decisão 2026-08-02)
+- [x] Histórico de retenção
+- [x] Banco de títulos
 
 ## IA
 
-- [ ] Aprender melhores títulos
-- [ ] Aprender melhores ganchos
-- [ ] Melhorar prompts automaticamente
+- [ ] Aprender melhores títulos (implementado 2026-08-02, em revisão — marcar concluído após acompanhar resultados reais com mais videos)
+- [ ] Aprender melhores ganchos (implementado 2026-08-02, em revisão — marcar concluído após acompanhar resultados reais com mais videos)
+- [ ] Melhorar prompts automaticamente (implementado 2026-08-02, em revisão — marcar concluído após acompanhar resultados reais com mais videos)
 
 ---
 

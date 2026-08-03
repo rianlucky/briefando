@@ -36,6 +36,7 @@ class Highlight(BaseModel):
     tags: list[str]
     hashtags: list[str]
     category: str
+    quality_score: int
 
 
 class HighlightList(BaseModel):

@@ -7,6 +7,19 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.4.0] - Topázio - 2026-08-02
+
+Fase 4 (Inteligência) do roadmap majoritariamente concluída — IA em revisão com dados reais.
+
+### Adicionado
+- IA (em revisão): antes de pedir os highlights, o Gemini recebe como referência os títulos que mais performaram no canal (via `get_top_performing_titles`), pra aprender com o que já funcionou de verdade em vez de depender só de um prompt estático. Só entra no prompt com histórico mínimo (`MIN_HISTORY_FOR_LEARNING`, padrão 3 clipes com métricas) pra não induzir a partir de poucas amostras.
+- Fluxo de Analytics ponta a ponta via n8n: Schedule Trigger diário → `clips for-analytics` → YouTube Data API (views/likes/comments) + Analytics API (tempo assistido/retenção) → `clips record-analytics`. Testado com 9 vídeos reais. CTR/impressões não são expostos pela API pública do YouTube — descartado do fluxo automatizado. `shortsgen clips set-video-id` adicionado pra backfill de clipes publicados antes do rastreamento de ID existir.
+- Analytics: nova tabela `clip_analytics` guarda uma série temporal de métricas por clipe (views, likes, comments, impressões, CTR, duração média assistida, retenção). `shortsgen clips for-analytics` lista os clipes publicados com ID do YouTube conhecido; `clips record-analytics <id>` registra uma leitura; `clips analytics <id>` mostra o histórico.
+- Quality Score: o mesmo pedido ao Gemini que gera os highlights agora também gera uma nota de 0-100 do potencial viral de cada clipe. Um mínimo configurável (`MIN_QUALITY_SCORE`, padrão 60) decide o que entra automático no fluxo de publicação (`clips next-pending`); o que fica abaixo espera revisão manual (`shortsgen clips review` lista os pendentes — inclusive clipes antigos sem nota, gerados antes dessa funcionalidade existir — e `clips approve <id>` libera um clipe específico pro fluxo normal).
+
+### Alterado
+- Posição da legenda agora acompanha o enquadramento do instante: linha de divisão do split-screen, ou ~10% mais alta que antes no foco em 1 pessoa (evitava ficar coberta pela descrição/UI nativa do Shorts/TikTok/Reels). Palavra ativa (efeito karaoke) agora também aumenta de tamanho (~130%), além de ficar amarela — mais dinâmico.
+
 ## [0.3.0] - Ametista - 2026-08-02
 
 Fase 3 (Automação) do roadmap concluída.
