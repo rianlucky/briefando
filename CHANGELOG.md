@@ -7,6 +7,11 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.5.2] - Esmeralda - 2026-08-03
+
+### Adicionado
+- `GEMINI_RETRY_DELAY_SECONDS` (novo, padrão 30s): delay entre tentativas especificamente da chamada ao Gemini, separado do delay genérico do pipeline. Erros "503 UNAVAILABLE" (modelo sobrecarregado do lado do Google) precisam de mais tempo entre tentativas que o delay genérico de 5s permitia, fazendo o retry esgotar o orçamento antes do pico de demanda passar.
+
 ## [0.5.1] - Esmeralda - 2026-08-03
 
 ### Adicionado

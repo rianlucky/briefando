@@ -247,7 +247,7 @@ def run_pipeline(
         highlight_list, gemini_usage = _retry(
             lambda: find_highlights(transcript),
             attempts=settings.pipeline_retry_attempts,
-            delay=settings.pipeline_retry_delay_seconds,
+            delay=settings.gemini_retry_delay_seconds,
             on_retry=_on_highlights_retry,
         )
         recorder.add_gemini_usage(gemini_usage["input_tokens"], gemini_usage["output_tokens"])
