@@ -8,8 +8,6 @@ from shortsgen.history import get_top_performing_titles
 from shortsgen.models import HighlightList, Transcript
 from shortsgen.pipeline.text_clean import clean_for_prompt
 
-_GEMINI_TIMEOUT_MS = 60_000
-
 YOUTUBE_CATEGORIES = {
     "Comédia": "23",
     "Entretenimento": "24",
@@ -165,7 +163,7 @@ def find_highlights(transcript: Transcript) -> tuple[HighlightList, dict]:
             system_instruction=system,
             response_mime_type="application/json",
             response_json_schema=HIGHLIGHT_SCHEMA,
-            http_options=types.HttpOptions(timeout=_GEMINI_TIMEOUT_MS),
+            http_options=types.HttpOptions(timeout=settings.gemini_timeout_seconds * 1000),
         ),
     )
 

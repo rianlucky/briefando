@@ -33,6 +33,7 @@ class Settings(BaseSettings):
 
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-3.5-flash"
+    gemini_timeout_seconds: int = 300
 
     whisper_model_size: str = "small"
     whisper_device: str = "auto"

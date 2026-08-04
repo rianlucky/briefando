@@ -79,10 +79,18 @@ def _release_queue_lock(lock_file) -> None:
         lock_file.close()
 
 
-def run_queue(reporter_factory=None) -> tuple[int, int]:
-    """Processa a fila ate esvaziar e entao retorna - nao fica esperando novos
-    itens aparecerem. A cadencia de chamar de novo fica por conta de quem
-    agenda (ex.: n8n). Retorna (concluidos, com_erro_terminal).
+def run_queue(reporter_factory=None, once: bool = False) -> tuple[int, int]:
+    """Processa a fila e entao retorna - nao fica esperando novos itens aparecerem.
+    A cadencia de chamar de novo fica por conta de quem agenda (ex.: n8n).
+    Retorna (concluidos, com_erro_terminal).
+
+    Por padrao drena a fila inteira (`once=False`) - jeito certo pra rodar manual
+    no terminal e ver tudo processado numa chamada so. Com `once=True`, processa
+    NO MAXIMO 1 item e retorna na hora, mesmo com mais itens pendentes depois -
+    pensado pra um agendador (n8n) que dispara em intervalos curtos: sem isso,
+    uma fila com varios videos longos (podcasts de 1h30-2h+) faz uma unica
+    chamada levar horas, deixando o node "Execute Command" do n8n parado
+    esperando o processo terminar em vez de devolver o controle pro workflow.
 
     So um worker por vez: se outra `queue run` ja estiver ativa, sai na hora
     sem mexer em nada (sem isso, duas execucoes simultaneas competem por CPU/GPU
@@ -118,6 +126,9 @@ def run_queue(reporter_factory=None) -> tuple[int, int]:
             else:
                 mark_queue_done(settings.db_path, item["id"])
                 done += 1
+
+            if once:
+                break
 
         return done, failed
     finally:

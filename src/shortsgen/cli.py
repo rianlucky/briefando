@@ -179,7 +179,14 @@ def queue_list() -> None:
 
 
 @queue_app.command("run")
-def queue_run() -> None:
+def queue_run(
+    once: bool = typer.Option(
+        False,
+        "--once",
+        help="Processa no maximo 1 item e sai na hora, mesmo com mais pendentes depois "
+        "(pensado pra agendadores como o n8n, que nao devem ficar travados esperando a fila inteira drenar).",
+    ),
+) -> None:
     """Processa a fila ate esvaziar (nao fica esperando novos itens - roda uma vez e sai)."""
     if not settings.gemini_api_key:
         console.print("[red]Erro:[/red] GEMINI_API_KEY nao configurada. Defina-a no arquivo .env antes de rodar.")
@@ -187,7 +194,7 @@ def queue_run() -> None:
 
     from shortsgen.queue import run_queue
 
-    done, failed = run_queue(reporter_factory=lambda: _make_rich_reporter(console))
+    done, failed = run_queue(reporter_factory=lambda: _make_rich_reporter(console), once=once)
     console.print(f"\n[bold]Fila processada:[/bold] {done} concluido(s), {failed} com erro.")
 
 

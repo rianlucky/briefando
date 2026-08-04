@@ -7,6 +7,12 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.5.1] - Esmeralda - 2026-08-03
+
+### Adicionado
+- `shortsgen queue run --once`: processa no máximo 1 item da fila e retorna na hora, mesmo com mais pendentes depois. Pensado pra agendadores como o n8n — sem essa flag, uma única chamada de `queue run` fica presa até drenar a fila inteira, e com vídeos longos (podcasts de 1h30-2h+) isso pode levar horas, travando o node "Execute Command" do n8n esperando o processo terminar. `queue run` sem a flag continua drenando tudo, pra uso manual no terminal.
+- `GEMINI_TIMEOUT_SECONDS` (novo, padrão 300s): timeout configurável da chamada de highlights ao Gemini. O valor antigo fixo de 60s estourava com `504 DEADLINE_EXCEEDED` em vídeos longos, cuja transcrição inteira vira um prompt enorme.
+
 ## [0.5.0] - Esmeralda - 2026-08-03
 
 Fase 5 (Plataforma) iniciada — Dashboard Web completo, mais descoberta automática de vídeos, correções de confiabilidade e uma auditoria de BI/UX.
