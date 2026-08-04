@@ -78,7 +78,7 @@ score_perf = get_score_vs_performance(settings.db_path)
 if score_perf:
     df_sp = pd.DataFrame(score_perf)
     points = alt.Chart(df_sp).mark_circle(color="#FDBB11", size=120, opacity=0.75).encode(
-        x=alt.X("quality_score:Q", title="Quality Score", scale=alt.Scale(domain=[0, 100])),
+        x=alt.X("quality_score:Q", title="Quality Score", scale=alt.Scale(domain=[70, 100])),
         y=alt.Y("views:Q", title="Views"),
         tooltip=[
             alt.Tooltip("title:N", title="Título"),

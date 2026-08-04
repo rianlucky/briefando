@@ -23,7 +23,10 @@ def trend_html(current: int, previous: int, higher_is_better: bool, compare_labe
 
 
 def stat_row(label: str, value, trend: str | None = None) -> str:
-    trend_block = f"<div style='text-align:right;'>{trend}</div>" if trend else ""
+    # Sempre reserva a altura da linha de tendencia, mesmo vazia - senao uma
+    # linha com tendencia fica mais alta que uma sem, e cards com/sem trend
+    # deixam de bater em altura mesmo tendo a mesma quantidade de linhas.
+    trend_block = f"<div style='text-align:right; min-height:1.1em;'>{trend or '&nbsp;'}</div>"
     return (
         "<div style='display:flex; justify-content:space-between; align-items:center; "
         "padding:6px 0; border-bottom:1px solid rgba(255,255,255,0.08);'>"
@@ -36,10 +39,20 @@ def stat_row(label: str, value, trend: str | None = None) -> str:
     )
 
 
-def stat_card(title: str, rows: list[tuple]) -> None:
+def _blank_stat_row() -> str:
+    """Linha invisivel, com a MESMA estrutura de uma stat_row real (rotulo +
+    valor + linha de tendencia) - usada so pra preencher cards mais curtos ate
+    a mesma quantidade de linhas dos outros da mesma fileira, garantindo altura
+    igual mesmo quando algumas linhas tem tendencia e outras nao."""
+    return f"<div style='visibility:hidden;'>{stat_row('&nbsp;', '&nbsp;')}</div>"
+
+
+def stat_card(title: str, rows: list[tuple], min_rows: int = 0) -> None:
     with st.container(border=True):
         st.markdown(f"**{title}**")
-        st.markdown("".join(stat_row(*row) for row in rows), unsafe_allow_html=True)
+        html = "".join(stat_row(*row) for row in rows)
+        html += _blank_stat_row() * max(0, min_rows - len(rows))
+        st.markdown(html, unsafe_allow_html=True)
 
 
 QUEUE_STATUS_BADGES = {

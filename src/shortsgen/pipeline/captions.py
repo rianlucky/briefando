@@ -20,8 +20,8 @@ ScaledBorderAndShadow: yes
 
 [V4+ Styles]
 Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
-Style: Bottom,Arial Black,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,2,60,60,448,1
-Style: Middle,Arial Black,72,&H00FFFFFF,&H000000FF,&H00000000,&H00000000,1,0,0,0,100,100,0,0,1,5,0,5,60,60,0,1
+Style: Bottom,Poppins ExtraBold,72,&H00FFFFFF,&H000000FF,&H00110803,&H00000000,1,0,0,0,100,100,0,0,1,5,0,2,60,60,448,1
+Style: Middle,Poppins ExtraBold,72,&H00FFFFFF,&H000000FF,&H00110803,&H00000000,1,0,0,0,100,100,0,0,1,5,0,5,60,60,0,1
 
 [Events]
 Format: Layer, Start, End, Style, Text

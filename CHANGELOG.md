@@ -7,6 +7,22 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.5.3] - Esmeralda - 2026-08-04
+
+### Adicionado
+- Zoom sutil nos clipes: Ken Burns contínuo (100% → 108% ao longo do clipe) somado a um punch-in de corte seco (sem transição suave) nos picos de volume/energia da voz — detectado a partir do próprio áudio do clipe, sem custo de API nem dependência do Gemini. Só se aplica no foco em 1 pessoa; desativado no split-screen.
+
+### Alterado
+- Split-screen: cada metade agora recorta uma área proporcional ao tamanho do rosto detectado (em vez da altura inteira da fonte) — as pessoas ficam consistentemente mais "perto" no enquadramento, na mesma proporção, independente da distância real da câmera em cada vídeo.
+- Split-screen: corrigida a atribuição de lado (topo/base) — antes reordenava por posição X a cada frame, o que podia trocar as pessoas de lado do nada quando elas se aproximavam ou a detecção saía ligeiramente instável. Agora cada rosto é atribuído ao lado mais próximo de onde estava no frame anterior, mantendo a identidade estável.
+- Fonte das legendas trocada de Arial Black para Poppins ExtraBold (instalada localmente), com a borda do texto agora na cor da marca (`#030811`) em vez de preto.
+
+### Corrigido
+- **Bug crítico: a fila inteira parava de processar vídeos**, todos falhando com `OSError: [Errno 22] Invalid argument`. Causa raiz: `download.py` desativava mensagens do yt-dlp (`quiet: True`) mas não a barra de progresso interna dele (`noprogress`, flag separada) — rodando sem um console de verdade (via n8n Execute Command), a tentativa de escrever essa barra quebrava e derrubava o download inteiro, para qualquer vídeo. Corrigido com `"noprogress": True` (a barra de progresso do yt-dlp nunca foi usada mesmo — o progresso real já vem do nosso próprio hook).
+- Dashboard: os 4 cards da Visão Geral (Hoje/Fila/Publicação/Consumo) agora ficam sempre com a mesma altura, preenchendo os mais curtos com linhas invisíveis até baterem com o mais alto — a tentativa anterior via CSS de flex/stretch não era confiável entre versões do Streamlit.
+- Dashboard: gráfico "% do tempo por etapa" sem o eixo horizontal (atrapalhava mais do que ajudava) e com a legenda de volta (um `padding` anterior estava cortando ela); segmento "Download" (estreito demais pro número caber dentro) agora mostra o % por cima da barra em branco.
+- Dashboard: eixo do gráfico Score × Views ajustado pra 70-100 (os dados reais ficam concentrados nessa faixa, o eixo 0-100 desperdiçava a maior parte do espaço).
+
 ## [0.5.2] - Esmeralda - 2026-08-03
 
 ### Adicionado

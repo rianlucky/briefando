@@ -28,6 +28,14 @@ def download_video(
         "merge_output_format": "mp4",
         "quiet": True,
         "no_warnings": True,
+        # "quiet" so suprime mensagens - a barra de progresso interna do
+        # yt-dlp e um mecanismo separado e continuava tentando escrever no
+        # stream do processo. Quando isso roda sem um console de verdade (via
+        # n8n/Execute Command), essa escrita quebra com "OSError: [Errno 22]
+        # Invalid argument" e derruba o download inteiro. Progresso real ja
+        # vem do nosso proprio `on_progress` hook, entao a barra do yt-dlp nao
+        # faz falta nenhuma.
+        "noprogress": True,
         "socket_timeout": 30,
         # Sempre um video so - sem isso, uma URL com "&list=" (ex.: copiada de
         # dentro de uma playlist) baixa a playlist inteira antes de falhar,

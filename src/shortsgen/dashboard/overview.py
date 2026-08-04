@@ -26,6 +26,11 @@ STAGE_LABELS_PT = {
     "highlights": "Highlights",
     "render": "Render",
 }
+# Rampa harmoniosa (tons de dourado da marca, claro -> escuro) so pro grafico de
+# % por etapa - aqui as 4 fatias sao partes de UM todo (tempo total), nao
+# categorias sem relacao, entao uma familia de cor so fica mais coesa que o
+# CATEGORICAL_PALETTE (que e pra series realmente distintas, ex.: Analytics).
+STAGE_HARMONY_PALETTE = ["#FDE0A0", "#FDBB11", "#F2994A", "#E8871E"]
 
 
 def _format_seconds(seconds: float) -> str:
@@ -70,7 +75,7 @@ def _period_ranges(period: str) -> tuple[tuple[str, str], tuple[str, str]]:
 st.title("Visão Geral")
 
 
-@st.fragment(run_every="3s")
+@st.fragment(run_every="1s")
 def render_activity() -> None:
     activity = get_current_activity(settings.db_path)
     if activity is None:
@@ -85,7 +90,7 @@ def render_activity() -> None:
     percent = min(0.99, elapsed_seconds / stage_avg) if stage_avg else 0.0
 
     st.info(f"**Rodando há {_format_seconds(elapsed_seconds)}:** {stage_label} — {activity['source']}")
-    st.progress(percent)
+    st.progress(percent, text=f"{percent * 100:.0f}%")
 
 
 render_activity()
@@ -108,6 +113,10 @@ previous_period = get_stats_for_range(settings.db_path, prev_start, prev_end)
 usage = get_resource_usage_for_range(settings.db_path, cur_start, cur_end)
 compare_label = "vs período anterior" if period != "Hoje" else "vs ontem"
 
+# Maior card (Fila, 4 linhas) define a altura - os demais sao preenchidos com
+# linhas invisiveis ate bater nesse numero, pra ficarem todos do mesmo tamanho.
+MAX_CARD_ROWS = 4
+
 col_hoje, col_fila, col_pub, col_consumo = st.columns(4)
 with col_hoje:
     stat_card(
@@ -124,6 +133,7 @@ with col_hoje:
                 trend_html(current_period["errors"], previous_period["errors"], False, compare_label),
             ),
         ],
+        min_rows=MAX_CARD_ROWS,
     )
 with col_fila:
     stat_card(
@@ -134,6 +144,7 @@ with col_fila:
             ("Com erro", queue["error"]),
             ("Concluídos", queue["done"]),
         ],
+        min_rows=MAX_CARD_ROWS,
     )
 with col_pub:
     stat_card(
@@ -143,6 +154,7 @@ with col_pub:
             ("Aguardando revisão", clips["needs_review"]),
             ("Publicados", clips["published"]),
         ],
+        min_rows=MAX_CARD_ROWS,
     )
 with col_consumo:
     stat_card(
@@ -152,6 +164,7 @@ with col_consumo:
             ("Tokens Gemini (saída)", f"{usage['output_tokens']:,}".replace(",", ".")),
             ("Tempo de máquina", _format_duration(usage["machine_seconds"])),
         ],
+        min_rows=MAX_CARD_ROWS,
     )
 
 st.divider()
@@ -187,18 +200,29 @@ if stats["stage_avgs"]:
     total = sum(seconds)
     cumulative = 0.0
     rows = []
+    # Pequeno respiro visual entre segmentos (arredondados nao ficam "colados").
+    GAP = 0.4
     for label, s in zip(ordered_labels, seconds):
         pct = s / total * 100
-        rows.append({"Etapa": label, "Início": cumulative, "Fim": cumulative + pct, "Percentual": pct, "Segundos": s})
+        rows.append(
+            {
+                "Etapa": label,
+                "Início": cumulative,
+                "Fim": max(cumulative, cumulative + pct - GAP),
+                "Percentual": pct,
+                "Segundos": s,
+            }
+        )
         cumulative += pct
     df_pct = pd.DataFrame(rows)
     df_pct["Meio"] = (df_pct["Início"] + df_pct["Fim"]) / 2
-    # So rotula dentro do segmento se ele for largo o suficiente pro texto caber -
-    # segmentos pequenos ficam sem numero cravado (sempre dá pra ver no tooltip).
-    df_pct["Rótulo %"] = df_pct["Percentual"].apply(lambda p: f"{p:.0f}%" if p >= 8 else "")
+    df_pct["Rótulo %"] = df_pct["Percentual"].apply(lambda p: f"{p:.0f}%")
+    # Segmento estreito demais pro numero caber dentro - rotulo vai por cima em
+    # vez de escondido (sem eixo embaixo, sobra espaço em cima pra isso).
+    df_pct["Estreito"] = df_pct["Percentual"] < 8
 
-    pct_bars = alt.Chart(df_pct).mark_bar(height=40).encode(
-        x=alt.X("Início:Q", title=None, scale=alt.Scale(domain=[0, 100]), axis=alt.Axis(format=".0f")),
+    pct_bars = alt.Chart(df_pct).mark_bar(cornerRadius=6, height=40).encode(
+        x=alt.X("Início:Q", title=None, scale=alt.Scale(domain=[0, 100]), axis=None),
         x2="Fim:Q",
         color=alt.Color(
             "Etapa:N",
@@ -212,11 +236,21 @@ if stats["stage_avgs"]:
             alt.Tooltip("Segundos:Q", format=".0f"),
         ],
     )
-    pct_labels = alt.Chart(df_pct).mark_text(color="#030811", fontWeight="bold").encode(
-        x=alt.X("Meio:Q"),
-        text="Rótulo %:N",
+    labels_inside = (
+        alt.Chart(df_pct[~df_pct["Estreito"]])
+        .mark_text(color="#030811", fontWeight="bold", align="center", baseline="middle")
+        .encode(x=alt.X("Meio:Q"), text="Rótulo %:N")
     )
-    pct_chart = (pct_bars + pct_labels).properties(height=90).configure_view(strokeWidth=0)
+    labels_outside = (
+        alt.Chart(df_pct[df_pct["Estreito"]])
+        .mark_text(color="#FFFFFF", fontWeight="bold", align="center", dy=-14)
+        .encode(x=alt.X("Meio:Q"), text="Rótulo %:N")
+    )
+    pct_chart = (
+        (pct_bars + labels_inside + labels_outside)
+        .properties(height=70)
+        .configure_view(strokeWidth=0)
+    )
     st.altair_chart(pct_chart, width="stretch")
 else:
     st.info("Sem dados suficientes ainda.")
