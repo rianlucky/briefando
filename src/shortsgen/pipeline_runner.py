@@ -18,8 +18,9 @@ from shortsgen.models import Transcript
 from shortsgen.pipeline.captions import build_ass_captions
 from shortsgen.pipeline.download import download_video
 from shortsgen.pipeline.highlights import DEFAULT_CATEGORY_ID, YOUTUBE_CATEGORIES, find_highlights
+from shortsgen.pipeline.jumpcuts import _detect_silence_spans, build_keep_segments, cut_with_jumpcuts, remap_words
 from shortsgen.pipeline.reframe import reframe_to_vertical
-from shortsgen.pipeline.render import cut_segment, mux_final
+from shortsgen.pipeline.render import mux_final
 from shortsgen.pipeline.transcribe import transcribe
 from shortsgen.queue import compute_dedup_key
 
@@ -323,15 +324,18 @@ def run_pipeline(
             clip_vertical = run_dir / f"clip_{idx}_vertical.mp4"
             clip_ass = run_dir / f"clip_{idx}.ass"
 
-            reporter.message("  Cortando trecho...")
-            cut_segment(video_path, highlight.start, highlight.end, clip_raw, cancel_event=cancel_event)
+            reporter.message("  Cortando trecho (removendo pausas)...")
+            silence_spans = _detect_silence_spans(video_path, highlight.start, highlight.end)
+            keep_segments = build_keep_segments(highlight.start, highlight.end, silence_spans)
+            cut_with_jumpcuts(video_path, keep_segments, clip_raw, cancel_event=cancel_event)
 
             reporter.message("  Reenquadrando para 9:16 (seguindo o rosto)...")
             mode_track = reframe_to_vertical(clip_raw, clip_vertical, cancel_event=cancel_event)
 
             reporter.message("  Gerando legendas...")
             words = transcript.words_between(highlight.start, highlight.end)
-            build_ass_captions(words, highlight.start, clip_ass, mode_track=mode_track)
+            words = remap_words(words, keep_segments)
+            build_ass_captions(words, 0.0, clip_ass, mode_track=mode_track)
 
             slug = _slugify(highlight.title)
             output_path = settings.output_dir / f"{idx:02d}-{slug}.mp4"

@@ -7,6 +7,11 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.5.5] - Esmeralda - 2026-08-05
+
+### Adicionado
+- **Jump-cuts automáticos**: remove pausas/vícios de linguagem acima de 1,2s dentro de cada clipe (detectado via silêncio real do áudio, mesma técnica do chunking de transcrição), deixando o ritmo mais dinâmico. Corte seco (sem transição), calibrado contra áudio real (0,6s testado primeiro, ficou picotado demais — 21 cortes num clipe de 51s; 1,2s deu resultado bem mais natural). Legendas realinhadas automaticamente pra bater com a nova linha do tempo após os cortes.
+
 ## [0.5.4] - Esmeralda - 2026-08-05
 
 ### Adicionado
