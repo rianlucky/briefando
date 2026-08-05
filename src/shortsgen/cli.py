@@ -14,11 +14,13 @@ from shortsgen.history import (
     clips_pending_review,
     get_clip_analytics_history,
     get_daily_stats,
+    get_latest_channel_stats,
     list_clips,
     list_queue,
     list_sources,
     mark_clip_published,
     next_unpublished_clip,
+    record_channel_stats,
     record_clip_analytics,
     remove_source,
     retry_queue_item,
@@ -34,6 +36,8 @@ clips_app = typer.Typer(add_completion=False, help="Clipes gerados e status de p
 app.add_typer(clips_app, name="clips")
 sources_app = typer.Typer(add_completion=False, help="Canais/playlists monitorados pra descoberta automatica de videos novos.")
 app.add_typer(sources_app, name="sources")
+channel_app = typer.Typer(add_completion=False, help="Estatisticas do canal (inscritos, views totais) - vem da YouTube Data API via automacao externa (n8n).")
+app.add_typer(channel_app, name="channel")
 console = Console()
 configure_logging(settings.log_dir)
 logger = logging.getLogger(__name__)
@@ -143,10 +147,14 @@ def dashboard() -> None:
 @queue_app.command("add")
 def queue_add(
     source: str = typer.Argument(..., help="URL do YouTube ou caminho de um arquivo de video local"),
+    duration: float = typer.Option(
+        None, "--duration", help="Duracao do video em segundos (se souber) - videos mais curtos "
+        "sao processados antes dos mais longos, mesmo chegando depois na fila."
+    ),
 ) -> None:
     """Adiciona um source a fila de processamento."""
     try:
-        item_id = add_to_queue(source)
+        item_id = add_to_queue(source, duration)
     except DuplicateQueueItem as exc:
         console.print(f"[yellow]{exc}[/yellow]")
         raise typer.Exit(1)
@@ -156,11 +164,15 @@ def queue_add(
 @queue_app.command("add-if-new")
 def queue_add_if_new(
     source: str = typer.Argument(..., help="URL do YouTube ou caminho de um arquivo de video local"),
+    duration: float = typer.Option(
+        None, "--duration", help="Duracao do video em segundos (se souber) - videos mais curtos "
+        "sao processados antes dos mais longos, mesmo chegando depois na fila."
+    ),
 ) -> None:
     """Adiciona a fila so se esse source nunca tiver sido visto antes (em qualquer
     status) - pensado pra descoberta automatica (RSS), que reescaneia o mesmo
     feed repetidamente e nao deve reenfileirar o que ja foi processado."""
-    item_id = add_to_queue_if_new(source)
+    item_id = add_to_queue_if_new(source, duration)
     if item_id is None:
         console.print(f"[dim]'{source}' ja foi visto antes, ignorado.[/dim]")
     else:
@@ -343,6 +355,32 @@ def clips_cleanup() -> None:
     """Apaga do disco os clipes publicados ha mais de CLIP_RETENTION_DAYS dias (padrao 10)."""
     deleted, missing = cleanup_published_clips()
     console.print(f"[green]{deleted} clipe(s) apagado(s).[/green] {missing} ja nao estavam no disco.")
+
+
+@channel_app.command("record-stats")
+def channel_record_stats(
+    subscriber_count: int = typer.Argument(..., help="Total de inscritos do canal"),
+    total_views: int = typer.Argument(..., help="Total de visualizacoes do canal (todo o historico)"),
+    video_count: int = typer.Option(None, "--video-count", help="Total de videos publicados no canal"),
+) -> None:
+    """Registra uma leitura de estatisticas do canal (uma linha por chamada, forma historico).
+    Pensado pra automacao externa (n8n) chamar apos consultar a YouTube Data API (`channels.list`)."""
+    record_channel_stats(settings.db_path, subscriber_count, total_views, video_count)
+    console.print(f"[green]Estatisticas do canal registradas:[/green] {subscriber_count} inscritos, {total_views} views.")
+
+
+@channel_app.command("stats")
+def channel_stats() -> None:
+    """Mostra a leitura mais recente de estatisticas do canal."""
+    stats = get_latest_channel_stats(settings.db_path)
+    if stats is None:
+        console.print("Sem estatisticas de canal registradas ainda.")
+        return
+    console.print(
+        f"[bold]{stats['subscriber_count']}[/bold] inscritos - "
+        f"[bold]{stats['total_views']}[/bold] views totais "
+        f"(lido em {stats['fetched_at']})"
+    )
 
 
 @sources_app.command("add")

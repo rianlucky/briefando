@@ -1,3 +1,4 @@
+import hashlib
 import logging
 import re
 import shutil
@@ -20,8 +21,38 @@ from shortsgen.pipeline.highlights import DEFAULT_CATEGORY_ID, YOUTUBE_CATEGORIE
 from shortsgen.pipeline.reframe import reframe_to_vertical
 from shortsgen.pipeline.render import cut_segment, mux_final
 from shortsgen.pipeline.transcribe import transcribe
+from shortsgen.queue import compute_dedup_key
 
 logger = logging.getLogger(__name__)
+
+_TRANSCRIPT_CACHE_DIR = settings.work_dir / "transcript_cache"
+
+
+def _transcript_cache_path(source: str) -> Path:
+    """Chave de cache = mesma `compute_dedup_key` da fila (ID do video ou
+    caminho resolvido) - independente do run_id, que muda a cada tentativa."""
+    digest = hashlib.sha256(compute_dedup_key(source).encode("utf-8")).hexdigest()
+    return _TRANSCRIPT_CACHE_DIR / f"{digest}.json"
+
+
+def _load_cached_transcript(source: str) -> Transcript | None:
+    path = _transcript_cache_path(source)
+    if not path.exists():
+        return None
+    try:
+        return Transcript.model_validate_json(path.read_text(encoding="utf-8"))
+    except Exception:
+        logger.warning("Cache de transcricao ilegivel pra %r, ignorando e retranscrevendo", source)
+        return None
+
+
+def _save_cached_transcript(source: str, transcript: Transcript) -> None:
+    _TRANSCRIPT_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    _transcript_cache_path(source).write_text(transcript.model_dump_json(), encoding="utf-8")
+
+
+def _clear_cached_transcript(source: str) -> None:
+    _transcript_cache_path(source).unlink(missing_ok=True)
 
 STAGE_LABELS = {
     "download": "Baixando/localizando video",
@@ -206,32 +237,52 @@ def run_pipeline(
         recorder.end_stage("download")
         if duration:
             recorder.set_source_duration(duration)
+            if duration > settings.max_source_duration_seconds:
+                raise ValueError(
+                    f"Video com {duration/3600:.1f}h - acima do limite de "
+                    f"{settings.max_source_duration_seconds/3600:.1f}h "
+                    "(MAX_SOURCE_DURATION_SECONDS). A transcricao em pedacos ja "
+                    "evita o estouro de memoria pra videos longos - esse teto e "
+                    "so uma trava de sanidade contra entradas patologicas "
+                    "(ex.: uma live de 24h+ entrando na fila por engano)."
+                )
 
         _check_cancelled()
         reporter.stage_started("transcricao")
         recorder.start_stage("transcricao")
 
-        factor = get_transcription_factor(settings.db_path)
+        cached_transcript = _load_cached_transcript(source)
+        if cached_transcript is not None:
+            transcript = cached_transcript
+            reporter.message("Transcricao reaproveitada de uma tentativa anterior (cache) - pulando Whisper.")
+            logger.info("Transcricao reaproveitada do cache (run %s)", run_id)
+        else:
+            factor = get_transcription_factor(settings.db_path)
 
-        def _on_transcribe_tick(elapsed: float) -> None:
-            if duration:
-                estimated_total = max(duration * factor, 1.0)
-                reporter.transcription_progress(min(99.0, elapsed / estimated_total * 100))
+            def _on_transcribe_tick(elapsed: float) -> None:
+                if duration:
+                    estimated_total = max(duration * factor, 1.0)
+                    reporter.transcription_progress(min(99.0, elapsed / estimated_total * 100))
 
-        def _on_transcribe_retry(attempt: int, exc: Exception) -> None:
-            reporter.message(f"  Transcricao falhou (tentativa {attempt}): {exc}. Tentando de novo...")
-            logger.warning("Transcricao falhou (run %s, tentativa %d): %s", run_id, attempt, exc)
+            def _on_transcribe_retry(attempt: int, exc: Exception) -> None:
+                reporter.message(f"  Transcricao falhou (tentativa {attempt}): {exc}. Tentando de novo...")
+                logger.warning("Transcricao falhou (run %s, tentativa %d): %s", run_id, attempt, exc)
 
-        transcript: Transcript = _run_with_progress_ticks(
-            lambda: _retry(
-                lambda: transcribe(video_path),
-                attempts=settings.pipeline_retry_attempts,
-                delay=settings.pipeline_retry_delay_seconds,
-                on_retry=_on_transcribe_retry,
-            ),
-            _on_transcribe_tick,
-            interval=2.0,
-        )
+            transcript = _run_with_progress_ticks(
+                lambda: _retry(
+                    lambda: transcribe(video_path),
+                    attempts=settings.pipeline_retry_attempts,
+                    delay=settings.pipeline_retry_delay_seconds,
+                    on_retry=_on_transcribe_retry,
+                ),
+                _on_transcribe_tick,
+                interval=2.0,
+            )
+            # Cacheado por dedup_key (nao pelo run_id, que muda a cada tentativa) -
+            # se uma etapa POSTERIOR (Gemini, render) falhar e a fila reenfileirar
+            # esse mesmo video, o proximo run reaproveita a transcricao em vez de
+            # rodar o Whisper de novo do zero (pode ser horas num video longo).
+            _save_cached_transcript(source, transcript)
         recorder.end_stage("transcricao")
         reporter.transcription_progress(100.0)
         reporter.message(f"Transcricao concluida. Idioma detectado: {transcript.language}")
@@ -312,5 +363,6 @@ def run_pipeline(
         reporter.run_failed(str(exc), run_dir)
         raise
     else:
+        _clear_cached_transcript(source)
         if not keep_temp:
             shutil.rmtree(run_dir, ignore_errors=True)

@@ -40,11 +40,11 @@ def compute_dedup_key(source: str) -> str:
     return source
 
 
-def add_to_queue(source: str) -> int:
-    return enqueue(settings.db_path, source, compute_dedup_key(source))
+def add_to_queue(source: str, duration_seconds: float | None = None) -> int:
+    return enqueue(settings.db_path, source, compute_dedup_key(source), duration_seconds)
 
 
-def add_to_queue_if_new(source: str) -> int | None:
+def add_to_queue_if_new(source: str, duration_seconds: float | None = None) -> int | None:
     """Como `add_to_queue`, mas ignora silenciosamente (retorna None) se esse
     source ja foi visto antes em qualquer status - inclusive 'done'/'error'.
     Pensado pra descoberta automatica (RSS), que reescaneia o mesmo feed
@@ -52,7 +52,7 @@ def add_to_queue_if_new(source: str) -> int | None:
     dedup_key = compute_dedup_key(source)
     if has_ever_been_queued(settings.db_path, dedup_key):
         return None
-    return enqueue(settings.db_path, source, dedup_key)
+    return enqueue(settings.db_path, source, dedup_key, duration_seconds)
 
 
 def _acquire_queue_lock():

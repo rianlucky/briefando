@@ -39,6 +39,8 @@ class Settings(BaseSettings):
     whisper_device: str = "auto"
     whisper_compute_type: str = "default"
     whisper_cpu_threads: int = 4
+    transcribe_chunk_min_seconds: int = 1200
+    transcribe_chunk_max_seconds: int = 3600
 
     work_dir: Path = Path("temp")
     output_dir: Path = Path("output")
@@ -48,6 +50,7 @@ class Settings(BaseSettings):
     max_clips: int = 5
     clip_min_seconds: int = 20
     clip_max_seconds: int = 90
+    max_source_duration_seconds: int = 21600
 
     queue_max_retries: int = 3
     clip_retention_days: int = 10

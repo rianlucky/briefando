@@ -68,6 +68,14 @@ CREATE TABLE IF NOT EXISTS sources (
     active INTEGER NOT NULL DEFAULT 1,
     created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS channel_stats (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    fetched_at TEXT NOT NULL,
+    subscriber_count INTEGER,
+    total_views INTEGER,
+    video_count INTEGER
+);
 """
 
 
@@ -90,6 +98,7 @@ def connect(db_path: Path) -> sqlite3.Connection:
     _ensure_column(conn, "runs", "source_duration_seconds", "REAL")
     _ensure_column(conn, "runs", "gemini_input_tokens", "INTEGER")
     _ensure_column(conn, "runs", "gemini_output_tokens", "INTEGER")
+    _ensure_column(conn, "queue", "duration_seconds", "REAL")
     _ensure_column(conn, "clips", "description", "TEXT")
     _ensure_column(conn, "clips", "tags", "TEXT")
     _ensure_column(conn, "clips", "hashtags", "TEXT")
@@ -360,14 +369,19 @@ class DuplicateQueueItem(Exception):
     """Levantada ao enfileirar um source que ja esta pendente ou rodando na fila."""
 
 
-def enqueue(db_path: Path, source: str, dedup_key: str) -> int:
+def enqueue(db_path: Path, source: str, dedup_key: str, duration_seconds: float | None = None) -> int:
+    """`duration_seconds`, quando informado (ex.: n8n ja consultou a YouTube Data
+    API pra filtrar por duracao minima na descoberta automatica), alimenta a
+    priorizacao automatica de `claim_next_pending` - videos mais curtos furam
+    a fila na frente dos mais longos, pra um video de horas nao bloquear varios
+    curtos que chegaram depois dele."""
     conn = connect(db_path)
     now = _now()
     try:
         cursor = conn.execute(
-            "INSERT INTO queue (source, dedup_key, status, retry_count, created_at, updated_at) "
-            "VALUES (?, ?, 'pending', 0, ?, ?)",
-            (source, dedup_key, now, now),
+            "INSERT INTO queue (source, dedup_key, status, retry_count, created_at, updated_at, duration_seconds) "
+            "VALUES (?, ?, 'pending', 0, ?, ?, ?)",
+            (source, dedup_key, now, now, duration_seconds),
         )
         conn.commit()
         return cursor.lastrowid
@@ -515,6 +529,144 @@ def record_clip_analytics(
     return cursor.lastrowid
 
 
+def record_channel_stats(
+    db_path: Path, subscriber_count: int, total_views: int, video_count: int | None = None
+) -> int:
+    """Registra uma leitura de estatisticas do CANAL (inscritos/views totais) -
+    metrica separada das de clipe, vem da YouTube Data API (`channels.list`)
+    via automacao externa (n8n), igual ao padrao ja usado pra analytics de clipe."""
+    conn = connect(db_path)
+    cursor = conn.execute(
+        "INSERT INTO channel_stats (fetched_at, subscriber_count, total_views, video_count) "
+        "VALUES (?, ?, ?, ?)",
+        (_now(), subscriber_count, total_views, video_count),
+    )
+    conn.commit()
+    return cursor.lastrowid
+
+
+def get_channel_stats_history(db_path: Path) -> list[dict]:
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT * FROM channel_stats ORDER BY fetched_at").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_latest_channel_stats(db_path: Path) -> dict | None:
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM channel_stats ORDER BY fetched_at DESC, id DESC LIMIT 1").fetchone()
+    conn.close()
+    return dict(row) if row else None
+
+
+def get_analytics_totals(db_path: Path) -> dict:
+    """Totais agregados (leitura mais recente de cada clipe publicado) - views,
+    likes, comentarios somados de todos os clipes, e quantos clipes tem
+    analytics registrado."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        """
+        SELECT
+            COALESCE(SUM(a.views), 0) AS total_views,
+            COALESCE(SUM(a.likes), 0) AS total_likes,
+            COALESCE(SUM(a.comments), 0) AS total_comments,
+            COUNT(*) AS clips_com_analytics
+        FROM clips c
+        JOIN (
+            SELECT clip_id, MAX(id) AS latest_id FROM clip_analytics GROUP BY clip_id
+        ) latest ON latest.clip_id = c.id
+        JOIN clip_analytics a ON a.id = latest.latest_id
+        WHERE a.views IS NOT NULL
+        """
+    ).fetchone()
+    conn.close()
+    return dict(row)
+
+
+def get_views_last_90_days(db_path: Path) -> int:
+    """Aproximacao de 'views de Shorts nos ultimos 90 dias' (requisito real de
+    monetizacao do YouTube Partner Program). Nossos dados sao leituras
+    periodicas (snapshots) de views acumuladas por clipe, nao views dia-a-dia
+    exatas - entao por clipe calculamos (leitura mais recente - leitura mais
+    proxima de 90 dias atras) e somamos. Se um clipe nao tem historico de 90
+    dias ainda, usa a leitura mais antiga disponivel como base (conta tudo
+    que ele tem de historico registrado)."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT clip_id, fetched_at, views FROM clip_analytics WHERE views IS NOT NULL "
+        "ORDER BY clip_id, fetched_at"
+    ).fetchall()
+    conn.close()
+
+    cutoff = (datetime.now() - timedelta(days=90)).isoformat()
+    per_clip: dict[int, list[tuple[str, int]]] = {}
+    for row in rows:
+        per_clip.setdefault(row["clip_id"], []).append((row["fetched_at"], row["views"]))
+
+    total_gained = 0
+    for readings in per_clip.values():
+        baseline = readings[0][1]
+        for fetched_at, views in readings:
+            if fetched_at <= cutoff:
+                baseline = views
+            else:
+                break
+        total_gained += max(0, readings[-1][1] - baseline)
+    return total_gained
+
+
+def get_views_over_time_aggregate(db_path: Path) -> list[dict]:
+    """Views totais (soma de todos os clipes) por dia - pra cada dia, usa a
+    leitura mais recente ja vista de cada clipe ate aquele dia (nao exige que
+    todo clipe tenha leitura exatamente naquele dia). Serve pra ver o
+    crescimento agregado do canal, nao so dos top 5 clipes."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT clip_id, fetched_at, views FROM clip_analytics WHERE views IS NOT NULL ORDER BY fetched_at"
+    ).fetchall()
+    conn.close()
+
+    daily_totals = []
+    latest_per_clip: dict[int, int] = {}
+    current_date = None
+    for row in rows:
+        date = row["fetched_at"][:10]
+        if current_date is not None and date != current_date:
+            daily_totals.append({"date": current_date, "total_views": sum(latest_per_clip.values())})
+        latest_per_clip[row["clip_id"]] = row["views"]
+        current_date = date
+    if current_date is not None:
+        daily_totals.append({"date": current_date, "total_views": sum(latest_per_clip.values())})
+    return daily_totals
+
+
+def get_category_breakdown(db_path: Path) -> list[dict]:
+    """Quantos clipes (publicados ou nao) existem por categoria do YouTube."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT COALESCE(category_id, 'sem categoria') AS category_id, COUNT(*) AS total "
+        "FROM clips GROUP BY category_id ORDER BY total DESC"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_quality_score_distribution(db_path: Path) -> list[dict]:
+    """Score de qualidade (Gemini) de cada clipe que tem nota - pra montar um
+    histograma da distribuicao de notas geradas."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("SELECT id, quality_score FROM clips WHERE quality_score IS NOT NULL").fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
 def get_clip_analytics_history(db_path: Path, clip_id: int) -> list[dict]:
     conn = connect(db_path)
     conn.row_factory = sqlite3.Row
@@ -642,6 +794,65 @@ def get_engagement_rates(db_path: Path, limit: int = 10) -> list[dict]:
         )
     result.sort(key=lambda r: r["engagement_rate"], reverse=True)
     return result[:limit]
+
+
+def get_retention_summary(db_path: Path, limit: int = 10) -> list[dict]:
+    """Retencao media (average_view_percentage, leitura mais recente) por
+    clipe - visto tanto quanto views (o algoritmo empurra views, mas retencao
+    diz mais sobre se o clipe realmente prende atencao)."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT c.title, a.average_view_percentage, a.views
+        FROM clips c
+        JOIN (
+            SELECT clip_id, MAX(id) AS latest_id FROM clip_analytics GROUP BY clip_id
+        ) latest ON latest.clip_id = c.id
+        JOIN clip_analytics a ON a.id = latest.latest_id
+        WHERE a.average_view_percentage IS NOT NULL
+        ORDER BY a.average_view_percentage DESC
+        LIMIT ?
+        """,
+        (limit,),
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_weekday_performance(db_path: Path) -> list[dict]:
+    """Views medias (leitura mais recente de cada clipe) agrupadas pelo dia da
+    semana em que o clipe foi PUBLICADO - ajuda a ver se algum dia da semana
+    performa melhor. `%w` do SQLite: 0=domingo .. 6=sabado."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        """
+        SELECT strftime('%w', c.published_at) AS weekday, AVG(a.views) AS avg_views, COUNT(*) AS n
+        FROM clips c
+        JOIN (
+            SELECT clip_id, MAX(id) AS latest_id FROM clip_analytics GROUP BY clip_id
+        ) latest ON latest.clip_id = c.id
+        JOIN clip_analytics a ON a.id = latest.latest_id
+        WHERE a.views IS NOT NULL AND c.published_at IS NOT NULL
+        GROUP BY weekday
+        """
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
+
+
+def get_publishing_cadence(db_path: Path) -> list[dict]:
+    """Quantos clipes foram publicados por dia - mostra o ritmo/consistencia
+    de publicacao ao longo do tempo."""
+    conn = connect(db_path)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT substr(published_at, 1, 10) AS dia, COUNT(*) AS total FROM clips "
+        "WHERE published_at IS NOT NULL GROUP BY dia ORDER BY dia"
+    ).fetchall()
+    conn.close()
+    return [dict(row) for row in rows]
 
 
 def build_youtube_feed_url(channel_id: str | None = None, playlist_id: str | None = None) -> str:
@@ -772,11 +983,18 @@ def get_clips_counts(db_path: Path, min_quality_score: int) -> dict:
 
 
 def claim_next_pending(db_path: Path) -> dict | None:
-    """Pega o item pendente mais antigo e marca como 'running'. None se a fila estiver vazia."""
+    """Pega o proximo item pendente e marca como 'running'. None se a fila estiver
+    vazia. Prioriza por duracao conhecida (mais curto primeiro) - um video de
+    horas nao bloqueia varios curtos que chegaram depois dele; itens sem
+    duracao conhecida (ex.: enfileirados manualmente sem passar `--duration`)
+    vao depois de todos os que tem duracao, mas ainda em ordem de chegada
+    entre si (nunca ficam parados pra sempre)."""
     conn = connect(db_path)
     conn.row_factory = sqlite3.Row
     row = conn.execute(
-        "SELECT * FROM queue WHERE status = 'pending' ORDER BY created_at LIMIT 1"
+        "SELECT * FROM queue WHERE status = 'pending' "
+        "ORDER BY (duration_seconds IS NULL), duration_seconds ASC, created_at ASC "
+        "LIMIT 1"
     ).fetchone()
     if row is None:
         conn.close()

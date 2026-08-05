@@ -7,6 +7,19 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.5.4] - Esmeralda - 2026-08-05
+
+### Adicionado
+- **Transcrição em pedaços para vídeos longos**: acima de `TRANSCRIBE_CHUNK_MAX_SECONDS` (padrão 1h), o áudio é cortado antes de transcrever — a extração de features do faster-whisper faz uma FFT do áudio inteiro de uma vez só (sem chunking interno), o que estourava memória em vídeos muito longos (medido: 4,74h de áudio precisava de 5,1GB só nesse array intermediário, numa máquina com ~10GB de RAM total). O corte procura o primeiro momento de **silêncio real** a partir de `TRANSCRIBE_CHUNK_MIN_SECONDS` (padrão 20min, limiar de -20dB calibrado contra áudio real), evitando cortar uma palavra ao meio; sem silêncio encontrado até o máximo, corta na marca mesmo. Validado de ponta a ponta no vídeo real que travava antes (17.052s / 4,74h) — pipeline completo (download → transcrição → Gemini → render) concluído com sucesso, 8 clipes gerados.
+- `MAX_SOURCE_DURATION_SECONDS` (padrão 6h): trava de sanidade contra entradas patológicas (ex.: uma live de 24h+ entrando na fila por engano) — não é mais a defesa contra o estouro de memória (isso já é resolvido pela transcrição em pedaços), só um teto de segurança.
+- **Cache de transcrição**: se uma etapa posterior (Gemini, render) falhar depois que a transcrição já teve sucesso, um retry reaproveita a transcrição em cache (por vídeo, não por tentativa) em vez de rodar o Whisper de novo do zero — evita repetir horas de trabalho por causa de uma falha transitória do Gemini.
+- **Priorização automática da fila por duração**: `queue add`/`add-if-new` aceitam `--duration <segundos>`; a fila passa a processar vídeos mais curtos antes dos mais longos (quando a duração é conhecida), em vez de estritamente por ordem de chegada — um vídeo de horas não segura mais vários curtos que chegaram depois dele. Itens sem duração informada continuam em ordem de chegada entre si, atrás dos que têm duração conhecida.
+- **Coleta de estatísticas de canal** (inscritos, views totais): nova tabela `channel_stats` e comandos `shortsgen channel record-stats`/`channel stats`, alimentados por um novo passo no n8n que consulta a YouTube Data API (`channels.list`).
+- **Analytics do dashboard bastante expandido**: cards de totais agregados (views/likes/comentários de todos os clipes, inscritos/views do canal), meta de monetização do YouTube Partner Program (1.000 inscritos + 10.000.000 views de Shorts nos últimos 90 dias, com barra de progresso e %), views totais e inscritos ao longo do tempo, retenção média, performance por dia da semana, ritmo de publicação, distribuição de categoria e de Quality Score, média de views por Short, inscritos por 1.000 views, e % das views vindas do Top 10 Shorts.
+
+### Corrigido
+- Dado de uma execução real interrompida manualmente (vídeo de 4,74h, render cancelado no meio pra priorizar um teste) ficou com `clips_generated=0` mesmo tendo gerado 6 clipes de verdade antes da interrupção — corrigido manualmente pra refletir a realidade (os agregados do dashboard já usam esse dado, sem precisar de código novo).
+
 ## [0.5.3] - Esmeralda - 2026-08-04
 
 ### Adicionado
