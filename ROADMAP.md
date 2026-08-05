@@ -141,7 +141,7 @@
 
 ## Publicadores
 
-- [ ] YouTube
+- [x] YouTube (via n8n, scheduler + upload já em produção)
 - [ ] TikTok
 - [ ] Instagram
 - [ ] Kwai

@@ -7,6 +7,11 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.5.7] - Esmeralda - 2026-08-05
+
+### Alterado
+- **Publicação sempre pega o clipe de melhor nota**: `next_unpublished_clip` escolhia aleatoriamente (`ORDER BY RANDOM()`) entre os clipes elegíveis pra não publicar sempre na mesma ordem de processamento. Trocado por `ORDER BY quality_score DESC, created_at ASC` — agora publica sempre o clipe não publicado com a maior `quality_score` (empate: o mais antigo primeiro), removendo a aleatoriedade a pedido do usuário.
+
 ## [0.5.6] - Esmeralda - 2026-08-05
 
 ### Corrigido

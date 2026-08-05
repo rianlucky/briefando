@@ -917,10 +917,10 @@ def approve_clip(db_path: Path, clip_id: int) -> bool:
 
 
 def next_unpublished_clip(db_path: Path, min_quality_score: int) -> dict | None:
-    """Escolhe aleatoriamente um clipe nao publicado (nao o mais antigo) - evita
-    publicar sempre na mesma ordem/sequencia dos videos processados. So
-    considera clipes com `quality_score >= min_quality_score` OU ja aprovados
-    manualmente (`approved = 1`) - os demais ficam esperando revisao (ver
+    """Escolhe o clipe nao publicado com a melhor `quality_score` (empate:
+    o mais antigo primeiro). So considera clipes com
+    `quality_score >= min_quality_score` OU ja aprovados manualmente
+    (`approved = 1`) - os demais ficam esperando revisao (ver
     `clips_pending_review`/`approve_clip`). Devolve com a descricao final
     (hashtags ja anexadas) e tags como lista, pronto pra automacao externa
     (ex.: n8n) usar direto no upload."""
@@ -929,7 +929,7 @@ def next_unpublished_clip(db_path: Path, min_quality_score: int) -> dict | None:
     row = conn.execute(
         "SELECT id, path, title, description, tags, hashtags, category_id FROM clips "
         "WHERE published = 0 AND (quality_score >= ? OR approved = 1) "
-        "ORDER BY RANDOM() LIMIT 1",
+        "ORDER BY quality_score DESC, created_at ASC LIMIT 1",
         (min_quality_score,),
     ).fetchone()
     conn.close()
