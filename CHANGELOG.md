@@ -7,6 +7,12 @@ subindo de valor a cada fase do [ROADMAP](ROADMAP.md) concluída.
 
 ## [Não lançado]
 
+## [0.5.6] - Esmeralda - 2026-08-05
+
+### Corrigido
+- **Enquadramento largo solto no meio do clipe (1 pessoa)**: o modo de foco em 1 pessoa sempre recortava a altura inteira da fonte; quando a gravação original cortava pra uma câmera mais aberta (plano geral do estúdio, cutaway), esse plano largo aparecia sem aviso no meio de uma sequência de rostos em close, quebrando a continuidade visual — em um caso real, esse plano aberto expunha inclusive uma leitura de patrocínio (tela com cupom de desconto) que não deveria ter sobrevivido ao corte. O crop agora acompanha o tamanho do rosto detectado (mesma técnica já usada no split-screen), apertando o enquadramento automaticamente quando a fonte muda pra um plano mais distante, em vez de mostrar o quadro largo cru. Validado contra um clipe real que tinha esse problema (vídeo "mensagem de esperança do astrofísico") — o corte largo desapareceu, mantendo o rosto em escala consistente do início ao fim.
+- **Prompt do Gemini agora evita trechos de patrocínio/publicidade**: instrução explícita pra nunca escolher (ou incluir) uma leitura de publi, cupom ou indicação de produto/site externo como highlight, mesmo que o resto do trecho seja um bom gancho.
+
 ## [0.5.5] - Esmeralda - 2026-08-05
 
 ### Adicionado

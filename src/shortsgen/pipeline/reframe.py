@@ -68,6 +68,17 @@ _SPLIT_FACE_HEIGHT_MULTIPLIER = 4.0
 # rosto de um instante saia ruidosa/pequena demais - evita zoom exagerado.
 _SPLIT_MIN_CROP_RATIO = 0.28
 
+# Foco em 1 pessoa: mesma ideia do split-screen, mas menos fechado (plano
+# medio em vez de busto) - o corte acompanha o TAMANHO do rosto, nao so a
+# posicao X. Antes o modo 1 pessoa sempre recortava a altura inteira da fonte;
+# quando a gravacao corta pra uma camera mais aberta (plano geral da mesa,
+# cutaway do estudio), esse recorte "solto" aparecia sem aviso no meio de uma
+# sequencia de rostos em close, quebrando a continuidade visual. Com o corte
+# proporcional ao rosto, um plano mais aberto da fonte vira zoom-in em vez de
+# um quadro largo. Primeiro palpite, sem calibracao com video real ainda.
+_SINGLE_FACE_HEIGHT_MULTIPLIER = 6.0
+_SINGLE_MIN_CROP_RATIO = 0.45
+
 # API antiga (mp.solutions.face_detection) foi removida em mediapipe >= 1.0 --
 # a partir dela usamos a API nova "Tasks", que exige baixar o modelo .tflite.
 # "full_range" (em vez de "short_range") detecta melhor rostos mais distantes da
@@ -141,6 +152,8 @@ def _build_tracks(samples: list[tuple[float, list[tuple[float, float, float, flo
     2 rostos - x, y e altura em pixels de cada lado) mais o 'voto' bruto de
     quantos rostos existem em cada instante."""
     single_track: list[tuple[float, float]] = []
+    single_y_track: list[tuple[float, float]] = []
+    single_size_track: list[tuple[float, float]] = []
     left_track: list[tuple[float, float]] = []
     right_track: list[tuple[float, float]] = []
     left_y_track: list[tuple[float, float]] = []
@@ -150,6 +163,8 @@ def _build_tracks(samples: list[tuple[float, list[tuple[float, float, float, flo
     raw_mode: list[tuple[float, int]] = []
 
     last_single = frame_w / 2
+    last_single_y = frame_h / 2
+    last_single_size = frame_h * 0.2
     last_left = frame_w * 0.3
     last_right = frame_w * 0.7
     last_left_y = frame_h / 2
@@ -160,7 +175,11 @@ def _build_tracks(samples: list[tuple[float, list[tuple[float, float, float, flo
     for t, faces in samples:
         if faces:
             last_single = faces[0][0]
+            last_single_y = faces[0][1]
+            last_single_size = faces[0][2]
         single_track.append((t, last_single))
+        single_y_track.append((t, last_single_y))
+        single_size_track.append((t, last_single_size))
 
         if len(faces) >= 2:
             xa, ya, ha, _ = faces[0]
@@ -194,6 +213,8 @@ def _build_tracks(samples: list[tuple[float, list[tuple[float, float, float, flo
 
     return (
         single_track,
+        single_y_track,
+        single_size_track,
         left_track,
         right_track,
         left_y_track,
@@ -377,6 +398,8 @@ def reframe_to_vertical(
     samples, src_w, src_h = _detect_face_samples(src_path, cancel_event=cancel_event)
     (
         single_track,
+        single_y_track,
+        single_size_track,
         left_track,
         right_track,
         left_y_track,
@@ -388,6 +411,8 @@ def reframe_to_vertical(
     mode_track = _debounce_mode(raw_mode)
 
     single_at = _make_x_at(_smooth(single_track))
+    single_y_at = _make_x_at(_smooth(single_y_track))
+    single_size_at = _make_x_at(_smooth(single_size_track))
     left_at = _make_x_at(_smooth(left_track))
     right_at = _make_x_at(_smooth(right_track))
     left_y_at = _make_x_at(_smooth(left_y_track))
@@ -406,8 +431,7 @@ def reframe_to_vertical(
     peak_times = _detect_volume_peaks(src_path)
     zoom_at = _make_zoom_at(duration, peak_times)
 
-    crop_w_single = min(src_w, round(src_h * TARGET_ASPECT))
-    crop_h_single = src_h
+    min_crop_h_single = src_h * _SINGLE_MIN_CROP_RATIO
 
     half_h = target_h // 2
     other_half_h = target_h - half_h
@@ -447,9 +471,17 @@ def reframe_to_vertical(
                 )
                 combined = cv2.vconcat([top, bottom])
             else:
+                # Corte proporcional ao tamanho do rosto detectado, igual ao
+                # split-screen - se a fonte cortar pra uma camera mais aberta
+                # (plano geral, cutaway), o rosto fica menor e o crop aperta
+                # pra compensar, em vez de mostrar o quadro largo cru.
+                crop_h_single = max(min_crop_h_single, single_size_at(t) * _SINGLE_FACE_HEIGHT_MULTIPLIER)
+                crop_h_single = min(crop_h_single, src_h)
+                crop_w_single = min(src_w, round(crop_h_single * TARGET_ASPECT))
                 zoom = zoom_at(t)
                 combined = _crop_and_resize(
-                    frame, single_at(t), crop_w_single, crop_h_single, target_w, target_h, src_w, src_h, zoom
+                    frame, single_at(t), crop_w_single, crop_h_single, target_w, target_h, src_w, src_h, zoom,
+                    center_y=single_y_at(t),
                 )
 
             writer.write(combined)

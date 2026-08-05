@@ -32,6 +32,7 @@ Criterios para um bom highlight:
 - Contem uma ideia completa: uma virada, uma piada, um dado surpreendente, uma historia ou um conselho acionavel
 - Duracao entre {min_s} e {max_s} segundos
 - Os timestamps de inicio e fim devem coincidir com o inicio/fim de frases da transcricao, nunca cortando uma ideia no meio
+- NUNCA escolha um trecho que seja (ou contenha) uma leitura de patrocinio/publicidade - propaganda de produto, cupom de desconto, "esse video e patrocinado por", indicacao de app/site externo. Mesmo que o resto do trecho seja um bom gancho, pule pra frente ate sair do publi antes de cortar
 
 Alem do corte, gere tambem os metadados de publicacao de cada clipe:
 - description: 2-3 frases descrevendo o clipe pro YouTube, sem hashtags (elas vao a parte)
